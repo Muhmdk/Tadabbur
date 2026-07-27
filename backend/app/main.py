@@ -11,14 +11,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import health, sessions
 from app.config import settings
+from app.redis_client import close_redis, init_redis
 from app.ws import audio_in, captions_out
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # TODO: open Redis pool, warm provider clients, register shutdown hooks.
+    redis = init_redis()
+    await redis.ping()  # fail fast if Redis is unreachable
+    # TODO: warm provider clients, register shutdown hooks.
     yield
-    # TODO: drain in-flight sessions, close Redis pool.
+    # TODO: drain in-flight sessions before closing Redis.
+    await close_redis()
 
 
 app = FastAPI(title="Tadabbur", version="0.1.0", lifespan=lifespan)
