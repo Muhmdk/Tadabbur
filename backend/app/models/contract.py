@@ -41,6 +41,14 @@ class HealthResponse(BaseModel):
 
 # ---------- WS: client -> server ----------
 
+# Raw audio format for speaker -> server binary frames on /ws/audio.
+# Mirrors AUDIO_FORMAT in shared/contract/index.ts. The upstream ASR
+# (Speechmatics real-time) accepts only raw PCM: signed 16-bit little-endian,
+# mono, 16 kHz. The frontend mic capture must produce exactly this.
+AUDIO_SAMPLE_RATE_HZ = 16000
+AUDIO_CHANNELS = 1
+AUDIO_ENCODING = "pcm_s16le"
+
 SpeakerRole = Literal["speaker", "viewer"]
 
 

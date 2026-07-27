@@ -5,9 +5,11 @@ package talks to ASRProvider, never to a vendor SDK directly. See CLAUDE.md §7.
 """
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Protocol
 
 
+@dataclass
 class ASRTranscript:
     """Single transcript event emitted by the provider.
 
@@ -20,6 +22,7 @@ class ASRTranscript:
     is_final: bool
     chunk_id: str
     timestamp_ms: int
+    ends_utterance: bool = False
 
 
 class ASRProvider(Protocol):

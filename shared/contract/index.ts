@@ -40,7 +40,23 @@ export interface HealthResponse {
 // ---------- WebSocket: client → server ----------
 //
 // Speaker clients send one JSON `session.attach` frame, then raw binary audio
-// chunks. Viewer clients send `session.attach` and receive only.
+// chunks in AUDIO_FORMAT (below). Viewer clients send `session.attach` and
+// receive only.
+
+/**
+ * Raw audio format for speaker → server binary frames on `/ws/audio`.
+ *
+ * The upstream ASR (Speechmatics real-time) accepts only raw PCM — no
+ * webm/opus — so the mic capture MUST emit signed 16-bit little-endian PCM,
+ * mono, at 16 kHz. Use the Web Audio API / AudioWorklet, not MediaRecorder.
+ * Backend mirror: AUDIO_* constants in backend/app/models/contract.py.
+ */
+export const AUDIO_FORMAT = {
+  sampleRateHz: 16000,
+  channels: 1,
+  /** Signed 16-bit little-endian PCM. */
+  encoding: "pcm_s16le",
+} as const;
 
 export type SpeakerRole = "speaker" | "viewer";
 

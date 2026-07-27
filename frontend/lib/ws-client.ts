@@ -13,6 +13,7 @@ import type {
 
 export type CaptionStreamHandlers = {
   onMessage: (msg: ServerMessage) => void;
+  onOpen?: () => void;
   onError?: (err: Event) => void;
   onClose?: (ev: CloseEvent) => void;
 };
@@ -36,6 +37,7 @@ export class CaptionStream {
         sessionId: this.sessionId,
         role: this.role,
       });
+      handlers.onOpen?.();
     });
 
     this.ws.addEventListener("message", (ev) => {
@@ -50,15 +52,24 @@ export class CaptionStream {
   }
 
   send(msg: ClientMessage): void {
-    this.ws?.send(JSON.stringify(msg));
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+    }
   }
 
   /** Speaker-only: push a raw audio chunk. */
-  sendAudio(chunk: ArrayBuffer | Blob): void {
-    this.ws?.send(chunk);
+  sendAudio(chunk: ArrayBuffer | Blob): boolean {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(chunk);
+      return true;
+    }
+    return false;
   }
 
-  close(): void {
+  close(sendStop = false): void {
+    if (sendStop && this.ws?.readyState === WebSocket.OPEN) {
+      this.send({ type: "session.stop", sessionId: this.sessionId });
+    }
     this.ws?.close();
     this.ws = null;
   }

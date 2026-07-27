@@ -1,5 +1,6 @@
 """Env-backed settings. One source of truth for runtime config."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +14,10 @@ class Settings(BaseSettings):
     google_application_credentials: str = ""
 
     # Comma-separated in env, parsed below.
-    allowed_origins_raw: str = "http://localhost:3000"
+    allowed_origins_raw: str = Field(
+        default="http://localhost:3000",
+        validation_alias="ALLOWED_ORIGINS",
+    )
 
     @property
     def allowed_origins(self) -> list[str]:
