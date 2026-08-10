@@ -1,3 +1,91 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Tadabbur design system — dark, high-contrast palette tuned for screen
+ * legibility in a bright prayer hall. Warm gold accent; Arabic in Noto Naskh,
+ * English in Inter. Mirrors the approved UI mockups.
+ */
+:root {
+  --bg: #0b1512;          /* app background            */
+  --bg-panel: #0e1a16;    /* panels / dashboard body   */
+  --bg-raised: #12201b;   /* cards, chips              */
+  --bg-raised-2: #16241f; /* pills, inputs             */
+  --bg-elev: #182b24;     /* gradient card top         */
+  --line: #1e332c;        /* hairline borders          */
+  --line-strong: #2a4139; /* stronger borders          */
+
+  --ink: #f5f2ea;         /* primary text              */
+  --ink-2: #e6ded0;       /* strong secondary          */
+  --ink-3: #c9d6cf;       /* body text                 */
+  --muted: #9db3aa;       /* muted body                */
+  --muted-2: #7c9186;     /* labels                    */
+  --muted-3: #6d8177;     /* dim labels                */
+  --muted-4: #5c6f65;     /* faint / placeholder       */
+  --faint: #54655c;       /* faintest                  */
+
+  --gold: #d4a94f;        /* accent                    */
+  --gold-bright: #e6c374; /* accent hover              */
+  --live: #e5533d;        /* live / recording          */
+  --live-wash: #3a1f1c;   /* live button background    */
+  --ok: #4caf7d;          /* healthy status            */
+
+  --font-inter: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-arabic: "Noto Naskh Arabic", "Amiri", "Geeza Pro", serif;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--bg); color-scheme: dark; }
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-inter);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button, input, select, textarea { font: inherit; }
+
+a { color: var(--gold); }
+a:hover { color: var(--gold-bright); }
+
+::selection { background: var(--gold); color: var(--bg); }
+
+.font-arabic { font-family: var(--font-arabic); }
+.font-inter { font-family: var(--font-inter); }
+
+/* Live / recording pulse used across all three surfaces. */
+@keyframes livepulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+.livepulse { animation: livepulse 1.4s ease-in-out infinite; }
+
+/* Soft ring pulse for status dots. */
+@keyframes status-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 83, 61, .45); }
+  50% { box-shadow: 0 0 0 6px rgba(229, 83, 61, 0); }
+}
+.status-ring { animation: status-ring 1.8s ease-in-out infinite; }
+
+/* Subtle new-caption entrance. */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rise-in { animation: rise-in .45s cubic-bezier(.2, .7, .2, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .livepulse, .status-ring, .rise-in { animation: none !important; }
+}
+
+/* Quiet, on-theme scrollbars for the dashboard transcript panes. */
+.scroll-quiet { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.scroll-quiet::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-quiet::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; }
+.scroll-quiet::-webkit-scrollbar-track { background: transparent; }
