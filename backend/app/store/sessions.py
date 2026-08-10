@@ -6,7 +6,7 @@ channel is named per session. Records carry a TTL so abandoned sessions
 self-clean during the quiet week between Friday bursts.
 """
 
-from app.models.contract import Session
+from app.models.contract import Session, SessionStatus
 from app.redis_client import get_redis
 
 # Session record: a string key holding the JSON-serialized Session.
@@ -36,6 +36,13 @@ async def get(session_id: str) -> Session | None:
     if raw is None:
         return None
     return Session.model_validate_json(raw)
+
+
+async def set_status(session: Session, status: SessionStatus) -> Session:
+    """Persist a lifecycle transition so REST readers see the live state."""
+    updated = session.model_copy(update={"status": status})
+    await save(updated)
+    return updated
 
 
 async def list_all() -> list[Session]:

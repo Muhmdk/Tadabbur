@@ -1,3 +1,64 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --ink: #15251e;
+  --ink-soft: #284036;
+  --paper: #f7f4eb;
+  --sand: #e7dfcc;
+  --moss: #1e5b46;
+  --moss-bright: #2f8063;
+  --gold: #c8963e;
+  --danger: #b84a40;
+  --font-arabic: "Noto Naskh Arabic", "Amiri", "Geeza Pro", serif;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--ink); }
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button, input, select { font: inherit; }
+
+::selection { background: #b9d5c4; color: var(--ink); }
+
+.font-arabic { font-family: var(--font-arabic); }
+
+.tadabbur-shell {
+  background:
+    radial-gradient(circle at 88% 0%, rgba(200, 150, 62, .16), transparent 28rem),
+    linear-gradient(125deg, #f8f5ed 0%, #f4efe3 100%);
+}
+
+.arabesque-grid {
+  background-image:
+    linear-gradient(30deg, rgba(30, 91, 70, .045) 12%, transparent 12.5%, transparent 87%, rgba(30, 91, 70, .045) 87.5%),
+    linear-gradient(150deg, rgba(30, 91, 70, .045) 12%, transparent 12.5%, transparent 87%, rgba(30, 91, 70, .045) 87.5%);
+  background-size: 48px 84px;
+}
+
+.glass-panel {
+  border: 1px solid rgba(21, 37, 30, .1);
+  background: rgba(255, 255, 255, .72);
+  box-shadow: 0 18px 50px rgba(28, 48, 39, .08);
+  backdrop-filter: blur(16px);
+}
+
+.status-pulse { animation: status-pulse 1.8s ease-in-out infinite; }
+
+@keyframes status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(47, 128, 99, .45); }
+  50% { box-shadow: 0 0 0 7px rgba(47, 128, 99, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-pulse { animation: none; }
+}

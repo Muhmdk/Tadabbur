@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Tadabbur",
-  description: "Live sermon translation",
+  title: "Tadabbur | Live khutbah translation",
+  description: "A clear, respectful live translation experience for Friday sermons.",
 };
 
 export default function RootLayout({
@@ -13,7 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-black text-white antialiased">{children}</body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

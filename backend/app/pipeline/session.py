@@ -62,7 +62,8 @@ async def open_session(session: Session) -> SessionRuntime:
     """Open the ASR stream and start publishing captions for this session."""
     asr: ASRProvider = SpeechmaticsASR(settings.speechmatics_api_key)
     await asr.open(session.sourceLanguage)
-    runtime = SessionRuntime(session=session, asr=asr, router=_build_router())
+    live_session = await session_store.set_status(session, "live")
+    runtime = SessionRuntime(session=live_session, asr=asr, router=_build_router())
     _runtimes[session.id] = runtime
     runtime.pump = asyncio.create_task(_pump(runtime))
     await redis_pubsub.publish(
@@ -80,6 +81,7 @@ async def close_session(session_id: str) -> None:
     await runtime.asr.close()  # ends the transcript stream → pump flushes + exits
     if runtime.pump is not None:
         await runtime.pump
+    await session_store.set_status(runtime.session, "ended")
     await redis_pubsub.publish(
         session_id,
         ServerSessionState(type="session.state", sessionId=session_id, state="ended"),
