@@ -1,19 +1,31 @@
 # frontend
 
-Next.js (App Router) UI for Tadabbur. Two surfaces:
+Next.js (App Router) UI for Tadabbur. Three surfaces:
 
-- **Projector display** (`/display/[sessionId]`) — full-screen, big type, RTL Arabic source + LTR translation.
-- **Control screen** (`/`) — session setup, language selection, start/stop.
+- **Control screen** (`/`) — prepare and share a session during the English khutbah, then start Arabic translation and control Quran mode.
+- **Projector display** (`/display/[sessionId]`) — large final captions and recitation notices.
+- **Attendee view** (`/join/[sessionId]`) — phone-sized final captions.
 
 See root `CLAUDE.md` for the bigger picture.
 
 ## Run
 
 ```bash
-cp .env.example .env.local
 npm install
 npm run dev
 ```
+
+Open the control page at `http://localhost:3000` on the operator computer. To
+let phones join on the same Wi-Fi, open it through the computer's LAN address,
+such as `http://192.168.1.50:3000`, and share the generated link. With no
+frontend environment overrides, the browser uses that same host on port 8000
+for the backend. The browser may require HTTPS before it allows microphone
+access from a non-localhost address. A production HTTPS site needs
+`NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_WS_BASE_URL` pointed at its
+reachable secure backend, or a reverse proxy for same-origin `/api` and
+`/ws`. See `.env.example`.
+
+Run `npm test`, `npm run typecheck`, and `npm run build` before release.
 
 ## Layout
 
@@ -25,8 +37,9 @@ app/
     layout.tsx            Full-screen layout for projector
     display/[sessionId]/page.tsx
 components/
-  CaptionRenderer.tsx     RTL source + LTR translation rendering
+  CaptionRenderer.tsx     Shared public rendering and Quran suppression
 lib/
+  endpoints.ts            Browser-aware API, WebSocket, and join URLs
   ws-client.ts            Typed WebSocket client (shared contract)
 types/
   contract.ts             Re-exports shared/contract for path stability

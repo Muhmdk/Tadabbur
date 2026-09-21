@@ -6,7 +6,7 @@
  * shapes. See CLAUDE.md §4 — any change starts here.
  */
 
-export const CONTRACT_VERSION = "0.1.0";
+export const CONTRACT_VERSION = "0.2.0";
 
 // ---------- Domain primitives ----------
 
@@ -28,7 +28,9 @@ export interface Session {
 // ---------- REST ----------
 
 export interface CreateSessionRequest {
+  /** Current Friday workflow accepts Arabic ("ar"). */
   sourceLanguage: Language;
+  /** Current operator workflow supports English ("en"). */
   targetLanguages: Language[];
 }
 
@@ -71,7 +73,14 @@ export interface ClientStop {
   sessionId: SessionId;
 }
 
-export type ClientMessage = ClientAttach | ClientStop;
+/** Speaker-only manual Quran recitation override. */
+export interface ClientRecitationMode {
+  type: "session.recitation";
+  sessionId: SessionId;
+  active: boolean;
+}
+
+export type ClientMessage = ClientAttach | ClientStop | ClientRecitationMode;
 
 // ---------- WebSocket: server → client ----------
 
@@ -90,6 +99,13 @@ export interface ServerSessionState {
   error?: string;
 }
 
+/** Manual recitation override state, broadcast to all viewers. */
+export interface ServerRecitationState {
+  type: "recitation.state";
+  sessionId: SessionId;
+  active: boolean;
+}
+
 /**
  * Interim transcript update. Source language only — translations are produced
  * on clause boundaries and emitted via `caption.final`.
@@ -102,6 +118,8 @@ export interface ServerCaptionPartial {
   lang: Language;
   /** Server epoch ms. */
   timestamp: number;
+  /** A Quran verse match was found in the interim Arabic transcript. */
+  isQuranicCandidate?: boolean;
 }
 
 /**
@@ -110,6 +128,9 @@ export interface ServerCaptionPartial {
  * `isQuranicHadithCandidate` flags content that the pipeline heuristically
  * identifies as scripture or hadith. The display layer should suppress or
  * specially render the machine translation in that case — see CLAUDE.md §9.
+ * `isQuranicCandidate` specifically marks a Quran verse match. Clients should
+ * replace the caption with a recitation notice and never show a machine
+ * translation for this clause.
  */
 export interface ServerCaptionFinal {
   type: "caption.final";
@@ -121,9 +142,11 @@ export interface ServerCaptionFinal {
   translations: Record<Language, string>;
   timestamp: number;
   isQuranicHadithCandidate?: boolean;
+  isQuranicCandidate?: boolean;
 }
 
 export type ServerMessage =
   | ServerSessionState
+  | ServerRecitationState
   | ServerCaptionPartial
   | ServerCaptionFinal;

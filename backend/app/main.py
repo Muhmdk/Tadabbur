@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import health, sessions
 from app.config import settings
+from app.pipeline.session import close_all_sessions
 from app.redis_client import close_redis, init_redis
 from app.ws import audio_in, captions_out
 
@@ -21,7 +22,7 @@ async def lifespan(app: FastAPI):
     await redis.ping()  # fail fast if Redis is unreachable
     # TODO: warm provider clients, register shutdown hooks.
     yield
-    # TODO: drain in-flight sessions before closing Redis.
+    await close_all_sessions()
     await close_redis()
 
 

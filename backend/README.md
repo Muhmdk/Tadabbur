@@ -12,6 +12,28 @@ uv run uvicorn app.main:app --reload --port 8000
 
 Redis must be running. From repo root: `docker compose up -d redis`.
 
+Session creation currently accepts Arabic speech with English captions. Set a
+Speechmatics key and either a DeepL key or a Google Cloud service-account JSON
+path before starting a session. DeepL is tried first; Google is the fallback.
+If both fail, viewers receive an error instead of an untranslated caption.
+
+## Quran protection
+
+The detector compares normalized ASR output with the locally bundled,
+**verbatim** Tanzil Quran Text (Simple Clean, version 1.1). Source:
+<https://tanzil.net/pub/download/index.php?quranType=simple-clean&outType=txt-2&agree=true>.
+Its copyright and CC BY 3.0 terms are included at the end of
+`app/pipeline/quran-simple-clean.txt`; source and updates are at
+<https://tanzil.net/>. SHA-256 of the downloaded file:
+`228df2a717671aeb9d2ff573002bd28d6b3f973f4bc7153554e3a81663d67610`.
+
+Six consecutive matching Arabic words, or a complete short ayah of three to
+five words spoken alone or after a Quran introduction, suppress translation
+and Arabic display. The operator can
+also switch Quran mode on manually. Transcript matching cannot identify every
+recitation: very short fragments, alternate wording, and ASR errors can be
+missed. Operators should use Quran mode whenever recitation begins.
+
 ## Layout
 
 ```

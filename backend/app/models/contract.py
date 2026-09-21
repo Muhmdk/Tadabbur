@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-CONTRACT_VERSION = "0.1.0"
+CONTRACT_VERSION = "0.2.0"
 
 # ---------- Domain primitives ----------
 
@@ -63,7 +63,13 @@ class ClientStop(BaseModel):
     sessionId: SessionId
 
 
-ClientMessage = ClientAttach | ClientStop
+class ClientRecitationMode(BaseModel):
+    type: Literal["session.recitation"]
+    sessionId: SessionId
+    active: bool
+
+
+ClientMessage = ClientAttach | ClientStop | ClientRecitationMode
 
 
 # ---------- WS: server -> client ----------
@@ -78,6 +84,12 @@ class ServerSessionState(BaseModel):
     error: str | None = None
 
 
+class ServerRecitationState(BaseModel):
+    type: Literal["recitation.state"]
+    sessionId: SessionId
+    active: bool
+
+
 class ServerCaptionPartial(BaseModel):
     type: Literal["caption.partial"]
     sessionId: SessionId
@@ -85,6 +97,7 @@ class ServerCaptionPartial(BaseModel):
     text: str
     lang: Language
     timestamp: int
+    isQuranicCandidate: bool | None = Field(default=None)
 
 
 class ServerCaptionFinal(BaseModel):
@@ -96,6 +109,9 @@ class ServerCaptionFinal(BaseModel):
     translations: dict[Language, str]
     timestamp: int
     isQuranicHadithCandidate: bool | None = Field(default=None)
+    isQuranicCandidate: bool | None = Field(default=None)
 
 
-ServerMessage = ServerSessionState | ServerCaptionPartial | ServerCaptionFinal
+ServerMessage = (
+    ServerSessionState | ServerRecitationState | ServerCaptionPartial | ServerCaptionFinal
+)

@@ -31,6 +31,8 @@ _MAX_DELAY = 1.0
 # A short pause marks a translation-ready phrase. Without this, short phrases
 # remain buffered until punctuation, the word cap, or the entire stream ends.
 _END_OF_UTTERANCE_SILENCE_SECONDS = 0.7
+_STOP_TIMEOUT_SECONDS = 8.0
+_CLOSE_TIMEOUT_SECONDS = 3.0
 
 # Sentinel marking end-of-stream on the transcript queue.
 _DONE = object()
@@ -92,13 +94,20 @@ class SpeechmaticsASR(ASRProvider):
             yield item
 
     async def close(self) -> None:
-        if self._client is not None:
-            try:
-                await self._client.stop_session()
-            finally:
-                await self._client.close()
-                self._client = None
-        await self._queue.put(_DONE)
+        try:
+            if self._client is not None:
+                try:
+                    await asyncio.wait_for(
+                        self._client.stop_session(), timeout=_STOP_TIMEOUT_SECONDS
+                    )
+                finally:
+                    try:
+                        await asyncio.wait_for(self._client.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+                    finally:
+                        self._client = None
+        finally:
+            # The pipeline must be released even if the SDK's close fails.
+            await self._queue.put(_DONE)
 
     # --- SDK callbacks: synchronous, invoked from the client's recv loop ---
 
@@ -109,9 +118,9 @@ class SpeechmaticsASR(ASRProvider):
         self._enqueue(message, is_final=True)
         self._chunk_id = uuid.uuid4().hex  # rotate for the next clause
 
-    def _on_error(self, message: dict[str, Any]) -> None:
+    def _on_error(self, _message: dict[str, Any]) -> None:
         # Surface upstream errors to the consumer; never swallow (CLAUDE.md §6).
-        self._queue.put_nowait(RuntimeError(f"Speechmatics error: {message}"))
+        self._queue.put_nowait(RuntimeError("Speech transcription provider reported an error"))
 
     def _on_end_of_utterance(self, _message: dict[str, Any]) -> None:
         self._queue.put_nowait(

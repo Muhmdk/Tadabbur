@@ -1,47 +1,25 @@
-# Product Backlog
+# Release validation still needed
 
-## Mobile attendee viewer
+The attendee viewer, shareable session links, QR code, reconnect states, and
+latest-caption replay are implemented. The following work needs a real Friday
+environment and must not be represented as already verified:
 
-**Revisit after:** the projector display is connected to live captions and the
-session creation workflow is stable.
+- Exercise Speechmatics with a real Arabic microphone feed and measure caption
+  latency and word accuracy in a mosque. Verify DeepL and Google fallback with
+  live credentials, including a provider outage.
+- Test with a running Redis deployment and multiple backend workers and viewers
+  under a Friday-sized burst. Automated tests currently use an in-memory Redis
+  substitute and fake providers.
+- Exercise worker-crash recovery in a real multi-worker deployment. After the
+  speaker lease expires, the operator can reconnect the existing live session,
+  but automatic operator reconnect and production failover timing still need
+  validation.
+- Review Quran detection with qualified Arabic speakers using actual khutbah
+  audio. Automatic text matching can miss ASR errors and very short recitations;
+  operators should arm Quran mode before a recitation. Never machine-translate
+  a suspected verse. Hadith handling needs a separately reviewed policy.
+- Confirm projector legibility and attendee phone access on the mosque's actual
+  network, including HTTPS and microphone permissions on the operator device.
 
-Allow attendees to join an active sermon session from their phones so a mosque
-does not need a projector for every listener.
-
-### Intended flow
-
-1. Mosque staff creates and starts a live session.
-2. The control screen shows a QR code containing a direct viewer URL such as
-   `/join/{sessionId}`.
-3. An attendee scans the QR code and lands directly in the live caption view.
-4. No account, name, email, form, or other personal information is requested.
-5. The attendee may switch among the session's available target languages.
-6. The phone subscribes as a read-only viewer and displays live captions.
-
-### Architecture
-
-- Reuse the existing `/ws/captions/{sessionId}` viewer WebSocket.
-- One Speechmatics stream and one translation pipeline remain shared by every
-  viewer; additional phones only add inexpensive Redis/WebSocket subscribers.
-- Language selection is initially client-side because each `caption.final`
-  already contains the session's target translations.
-
-### Acceptance criteria
-
-- Mobile-first caption view with readable Arabic source and selected translation.
-- QR code opens the live read-only viewer directly, with no intermediate setup.
-- Shareable links and short codes may be offered as accessibility fallbacks.
-- No attendee authentication or personal-information collection.
-- No microphone permission requested from attendees.
-- Automatic reconnect after temporary network loss.
-- Clear states for waiting, live, ended, unavailable, and connection failure.
-- A newly joined viewer receives current session state and recent caption context.
-- Session IDs are unguessable and expire after the sermon; viewers cannot send
-  audio, stop the shared session, or access control actions.
-
-### Related deferred work
-
-- Quranic/hadith detection must use verified source matching and established
-  published translations; uncertain matches must suppress machine translation.
-- Redis pub/sub has no replay, so recent-caption recovery needs a small retained
-  history or Redis Streams.
+Do not add published scripture translations without selecting a licensed,
+reviewed source and designing a verse-identity verification step first.

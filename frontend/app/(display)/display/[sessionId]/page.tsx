@@ -6,13 +6,12 @@ import { QRCodeSVG } from "qrcode.react";
 import type { Language, ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
 import CaptionRenderer from "@/components/CaptionRenderer";
+import { browserEndpoints } from "@/lib/endpoints";
+import { nextPartialCaptionState, selectPublicCaption } from "@/lib/public-caption";
 import { CaptionStream } from "@/lib/ws-client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const WS_URL = process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://localhost:8000";
-const JOIN_URL = process.env.NEXT_PUBLIC_JOIN_BASE_URL ?? "http://localhost:3000";
 
-type DisplayState = "connecting" | "waiting" | "live" | "ended" | "error";
+type DisplayState = "connecting" | "reconnecting" | "waiting" | "live" | "ended" | "error";
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: "English", ur: "Urdu", fr: "French", tr: "Turkish", so: "Somali", ar: "Arabic",
@@ -23,6 +22,7 @@ function languageName(code: string): string {
 
 function statusLabel(state: DisplayState): string {
   if (state === "connecting") return "Connecting";
+  if (state === "reconnecting") return "Reconnecting";
   if (state === "waiting") return "Waiting for the khutbah";
   if (state === "live") return "Live";
   if (state === "ended") return "Session ended";
@@ -38,25 +38,39 @@ export default function DisplayPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<DisplayState>("connecting");
-  const [partial, setPartial] = useState("");
+  const [partialState, setPartialState] = useState<"none" | "listening" | "quran">("none");
   const [latest, setLatest] = useState<ServerCaptionFinal | null>(null);
+  const [manualQuran, setManualQuran] = useState(false);
   const [error, setError] = useState("");
+  const [joinBaseUrl, setJoinBaseUrl] = useState("");
+
+  useEffect(() => { setJoinBaseUrl(browserEndpoints().join); }, []);
 
   useEffect(() => {
     let stream: CaptionStream | null = null;
     let cancelled = false;
+    let ended = false;
+    let terminalError = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
 
     const handleMessage = (message: ServerMessage) => {
       if (message.type === "caption.partial") {
-        setPartial(message.text);
+        setPartialState((current) => nextPartialCaptionState(current, Boolean(message.isQuranicCandidate)));
         setState("live");
       } else if (message.type === "caption.final") {
         setLatest(message);
-        setPartial("");
+        setPartialState("none");
         setState("live");
+      } else if (message.type === "recitation.state") {
+        setManualQuran(message.active);
+        setLatest(null);
+        setPartialState("none");
       } else if (message.state === "ended") {
+        ended = true;
         setState("ended");
       } else if (message.state === "error") {
+        terminalError = true;
         setError(message.error ?? "The caption stream encountered an error.");
         setState("error");
       } else if (message.state === "live") {
@@ -64,35 +78,56 @@ export default function DisplayPage() {
       }
     };
 
+    function retry(owner?: CaptionStream) {
+      if (owner && owner !== stream) return;
+      if (cancelled || ended || terminalError || retryTimer) return;
+      const old = stream;
+      stream = null;
+      old?.close();
+      setPartialState("listening");
+      setState("reconnecting");
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void connect();
+      }, Math.min(8000, 1000 * 2 ** attempts++));
+    }
+
     async function connect() {
       try {
-        const response = await fetch(`${API_URL}/api/sessions/${sessionId}`);
-        if (!response.ok) throw new Error(response.status === 404 ? "This session is unavailable." : "Could not load this session.");
+        const endpoints = browserEndpoints();
+        const response = await fetch(`${endpoints.api}/api/sessions/${sessionId}`);
+        if (response.status === 404) { terminalError = true; throw new Error("This session is unavailable."); }
+        if (!response.ok) throw new Error("Could not load this session.");
         const nextSession = (await response.json()) as Session;
         if (cancelled) return;
         setSession(nextSession);
-        stream = new CaptionStream(WS_URL, sessionId, "viewer");
-        stream.connect({
-          onMessage: handleMessage,
-          onOpen: () => setState("waiting"),
-          onError: () => { setError("The display could not connect to the live caption stream."); setState("error"); },
-          onClose: () => setState((current) => current === "ended" || current === "error" ? current : "error"),
+        if (nextSession.status === "ended") { ended = true; setState("ended"); return; }
+        const nextStream = new CaptionStream(endpoints.ws, sessionId, "viewer");
+        stream = nextStream;
+        nextStream.connect({
+          onMessage: (message) => { if (stream === nextStream) handleMessage(message); },
+          onOpen: () => { if (stream !== nextStream) return; attempts = 0; setError(""); setState(nextSession.status === "live" ? "live" : "waiting"); },
+          onError: () => retry(nextStream),
+          onClose: () => retry(nextStream),
         });
       } catch (caught) {
         if (!cancelled) {
-          setError(caught instanceof Error ? caught.message : "Could not open this display.");
-          setState("error");
+          if (terminalError) {
+            setError(caught instanceof Error ? caught.message : "Could not open this display.");
+            setState("error");
+          } else retry();
         }
       }
     }
 
     void connect();
-    return () => { cancelled = true; stream?.close(); };
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); stream?.close(); };
   }, [sessionId]);
 
   const targetLanguage: Language = session?.targetLanguages[0] ?? "en";
-  const followUrl = `${JOIN_URL}/join/${sessionId}`;
+  const followUrl = joinBaseUrl ? `${joinBaseUrl}/join/${sessionId}` : "";
   const isLive = state === "live";
+  const publicCaption = selectPublicCaption(latest, partialState, manualQuran);
 
   return (
     <div
@@ -109,7 +144,7 @@ export default function DisplayPage() {
         </div>
 
         <div className="min-w-0 text-center">
-          <div className="truncate text-[clamp(.9rem,1.3vw,1.1rem)] font-semibold text-[#e6ded0]">Al-Noor Masjid</div>
+          <div className="truncate text-[clamp(.9rem,1.3vw,1.1rem)] font-semibold text-[#e6ded0]">Tadabbur</div>
           <div className="mt-1 text-[clamp(.7rem,1vw,.8rem)] text-[#6d8177]">Jummah Khutbah · {formatDate(session?.createdAt)}</div>
         </div>
 
@@ -132,19 +167,17 @@ export default function DisplayPage() {
           <div className="max-w-2xl border-l-2 border-[#e5533d] pl-6 text-[clamp(1.1rem,2.4vw,1.75rem)] leading-relaxed text-[#f2cfca]">
             {error}
           </div>
-        ) : state === "ended" && !latest ? (
+        ) : state === "ended" ? (
           <div className="text-center">
             <p className="font-arabic text-[clamp(2rem,5vw,4rem)] text-[#f7ead0]">جزاكم الله خيراً</p>
             <p className="mt-6 text-[clamp(1.1rem,2.4vw,1.9rem)] leading-relaxed text-white/75">This live translation session has ended.</p>
           </div>
         ) : (
           <CaptionRenderer
-            sessionId={sessionId}
-            source={partial || latest?.source || ""}
-            sourceLang="ar"
-            translations={latest?.translations ?? {}}
+            caption={publicCaption.caption}
             targetLanguage={targetLanguage}
-            isQuranicHadithCandidate={latest?.isQuranicHadithCandidate}
+            isQuranActive={publicCaption.isQuranActive}
+            waitingText={state === "connecting" ? "Connecting to live captions…" : state === "waiting" ? "Captions begin when the Arabic khutbah starts." : state === "reconnecting" ? "Reconnecting to live captions…" : "Listening for the next phrase…"}
           />
         )}
       </main>
@@ -152,16 +185,16 @@ export default function DisplayPage() {
       {/* Footer ------------------------------------------------------------ */}
       <footer className="flex shrink-0 items-end justify-between gap-4 px-[clamp(1.25rem,4vw,3rem)] pb-[clamp(1.25rem,3.5vh,1.75rem)]">
         <div className="text-[clamp(.68rem,1vw,.78rem)] text-[#54655c]">
-          Arabic → {languageName(targetLanguage)} · translation shown after each complete phrase
+          Arabic → {languageName(targetLanguage)} · shown after each complete phrase
         </div>
-        <div className="flex items-center gap-3 rounded-xl border border-[#1e332c] bg-[#12201b] p-2 pr-3">
+        {followUrl && !/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(followUrl) && <div className="flex items-center gap-3 rounded-xl border border-[#1e332c] bg-[#12201b] p-2 pr-3">
           <div className="rounded-md bg-white p-1.5">
             <QRCodeSVG value={followUrl} size={40} marginSize={0} level="M" />
           </div>
           <div className="text-[clamp(.62rem,.85vw,.72rem)] leading-tight text-[#7c9186]">
             Scan to follow<br />on your phone
           </div>
-        </div>
+        </div>}
       </footer>
     </div>
   );

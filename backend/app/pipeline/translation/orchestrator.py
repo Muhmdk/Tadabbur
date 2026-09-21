@@ -1,10 +1,9 @@
 """Translation orchestration: a primary provider with ordered fallbacks.
 
 For each target language the router tries providers in order and uses the first
-that succeeds (DeepL primary, Google fallback — CLAUDE.md §7). Targets are
-translated concurrently to keep clause latency low (§1). A target whose
-providers all fail is omitted from the result rather than blocking the caption;
-the failure is logged, not silently swallowed (§6).
+that succeeds (DeepL primary, Google fallback). Targets are translated
+concurrently to keep clause latency low. A failed target raises so the session
+never silently presents an untranslated sermon clause as a successful caption.
 """
 
 import asyncio
@@ -13,6 +12,11 @@ import logging
 from app.pipeline.translation.base import Translator
 
 logger = logging.getLogger(__name__)
+_PROVIDER_TIMEOUT_SECONDS = 4.0
+
+
+class TranslationUnavailable(RuntimeError):
+    """No configured provider could translate a requested target language."""
 
 
 class TranslationRouter:
@@ -27,18 +31,21 @@ class TranslationRouter:
         results = await asyncio.gather(
             *(self._translate(text, source_lang, target) for target in targets)
         )
-        return {t: r for t, r in zip(targets, results, strict=True) if r is not None}
+        return dict(zip(targets, results, strict=True))
 
-    async def _translate(self, text: str, source_lang: str, target: str) -> str | None:
+    async def _translate(self, text: str, source_lang: str, target: str) -> str:
         for provider in self._providers:
             try:
-                return await provider.translate(text, source_lang, target)
+                return await asyncio.wait_for(
+                    provider.translate(text, source_lang, target),
+                    timeout=_PROVIDER_TIMEOUT_SECONDS,
+                )
             except Exception as exc:
                 logger.warning(
-                    "translation %s->%s failed via %s: %s",
+                    "translation %s->%s failed via %s (%s)",
                     source_lang,
                     target,
                     type(provider).__name__,
-                    exc,
+                    type(exc).__name__,
                 )
-        return None
+        raise TranslationUnavailable(f"No provider translated {source_lang} to {target}")

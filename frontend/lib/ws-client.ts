@@ -51,10 +51,12 @@ export class CaptionStream {
     if (handlers.onClose) this.ws.addEventListener("close", handlers.onClose);
   }
 
-  send(msg: ClientMessage): void {
+  send(msg: ClientMessage): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }
 
   /** Speaker-only: push a raw audio chunk. */

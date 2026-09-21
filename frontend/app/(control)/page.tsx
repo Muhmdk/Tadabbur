@@ -5,54 +5,58 @@ import { QRCodeSVG } from "qrcode.react";
 import type { ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
 import { PcmMicrophone } from "@/lib/microphone";
+import { browserEndpoints } from "@/lib/endpoints";
 import { CaptionStream } from "@/lib/ws-client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const WS_URL = process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://localhost:8000";
-const JOIN_URL = process.env.NEXT_PUBLIC_JOIN_BASE_URL ?? "http://localhost:3000";
-
-type RunState = "idle" | "starting" | "live" | "stopping" | "error";
-
-const languageNames: Record<string, string> = { en: "English", ur: "Urdu", fr: "French", tr: "Turkish", so: "Somali", ar: "Arabic" };
-function languageName(code: string): string {
-  return languageNames[code.toLowerCase()] ?? code.toUpperCase();
-}
-
-function micCopy(runState: RunState): string {
-  if (runState === "live") return "Mic live · transcribing";
-  if (runState === "starting") return "Starting…";
-  if (runState === "stopping") return "Closing session…";
-  if (runState === "error") return "Needs attention";
-  return "Paused";
-}
+type RunState = "idle" | "preparing" | "starting" | "live" | "stopping" | "error";
 
 function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60).toString().padStart(2, "0");
-  const s = Math.floor(seconds % 60).toString().padStart(2, "0");
-  return `${m}:${s}`;
+  const minutes = Math.floor(seconds / 60).toString().padStart(2, "0");
+  const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
+  return `${minutes}:${remainder}`;
 }
 
-function todayLabel(): string {
-  return new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+async function responseError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: string | { msg?: string }[] };
+    if (typeof body.detail === "string") return body.detail;
+    if (Array.isArray(body.detail)) return body.detail.map((issue) => issue.msg).filter(Boolean).join("; ");
+  } catch {
+    // The HTTP status remains useful when the backend has no JSON error body.
+  }
+  return `Could not start the session (HTTP ${response.status}).`;
 }
 
 export default function ControlPage() {
   const [runState, setRunState] = useState<RunState>("idle");
   const [sessionId, setSessionId] = useState("");
-  const [targetLanguagesInput, setTargetLanguagesInput] = useState("en, ur");
   const [partial, setPartial] = useState("");
+  const [partialQuran, setPartialQuran] = useState(false);
   const [finals, setFinals] = useState<ServerCaptionFinal[]>([]);
   const [error, setError] = useState("");
   const [micLevel, setMicLevel] = useState(0);
   const [bytesSent, setBytesSent] = useState(0);
-  const [copied, setCopied] = useState<"join" | "display" | "">("");
+  const [copied, setCopied] = useState(false);
+  const [recitationMode, setRecitationMode] = useState(false);
+  const [recitationArmed, setRecitationArmed] = useState(false);
+  const [recitationPending, setRecitationPending] = useState<boolean | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [siteOrigin, setSiteOrigin] = useState("");
   const speakerRef = useRef<CaptionStream | null>(null);
   const viewerRef = useRef<CaptionStream | null>(null);
   const microphoneRef = useRef<PcmMicrophone | null>(null);
+  const activeRef = useRef(false);
   const endedResolverRef = useRef<(() => void) | null>(null);
+  const liveResolverRef = useRef<{ resolve: () => void; reject: (error: Error) => void } | null>(null);
+  const recitationResolverRef = useRef<{ desired: boolean; resolve: () => void } | null>(null);
+  const recitationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { setSiteOrigin(browserEndpoints().join); }, []);
 
   const cleanUp = useCallback(async (sendStop: boolean) => {
+    activeRef.current = false;
+    if (recitationTimerRef.current) clearTimeout(recitationTimerRef.current);
+    recitationTimerRef.current = null;
     await microphoneRef.current?.stop();
     microphoneRef.current = null;
     speakerRef.current?.close(sendStop);
@@ -62,279 +66,326 @@ export default function ControlPage() {
   }, []);
 
   useEffect(() => () => { void cleanUp(false); }, [cleanUp]);
-
-  // Live elapsed clock — ticks only while the session is running.
   useEffect(() => {
     if (runState !== "live") return;
-    setElapsed(0);
     const started = Date.now();
-    const id = window.setInterval(() => setElapsed((Date.now() - started) / 1000), 1000);
-    return () => window.clearInterval(id);
+    const timer = window.setInterval(() => setElapsed((Date.now() - started) / 1000), 1000);
+    return () => window.clearInterval(timer);
   }, [runState]);
+
+  function failSession(message: string) {
+    liveResolverRef.current?.reject(new Error(message));
+    liveResolverRef.current = null;
+    if (activeRef.current) {
+      void cleanUp(false);
+      setError(message);
+      setRunState("error");
+    }
+  }
 
   function handleMessage(message: ServerMessage) {
     if (message.type === "caption.partial") {
       setPartial(message.text);
-      return;
-    }
-    if (message.type === "caption.final") {
-      setFinals((current) => [...current, message]);
+      setPartialQuran(Boolean(message.isQuranicCandidate));
+    } else if (message.type === "caption.final") {
+      setFinals((current) => [...current.slice(-29), message]);
       setPartial("");
-      return;
+      setPartialQuran(false);
+    } else if (message.type === "recitation.state") {
+      setRecitationMode(message.active);
+      setRecitationPending(null);
+      if (recitationResolverRef.current?.desired === message.active) {
+        recitationResolverRef.current.resolve();
+        recitationResolverRef.current = null;
+      }
+      if (message.active) setRecitationArmed(false);
+      if (recitationTimerRef.current) clearTimeout(recitationTimerRef.current);
+      recitationTimerRef.current = null;
+      if (!message.active) { setFinals([]); setPartial(""); setPartialQuran(false); }
+    } else if (message.state === "live" || message.state === "ready") {
+      liveResolverRef.current?.resolve();
+      liveResolverRef.current = null;
+    } else if (message.state === "error") {
+      failSession(message.error ?? "The transcription session could not continue.");
+    } else if (message.state === "ended") {
+      endedResolverRef.current?.();
+      endedResolverRef.current = null;
+      if (activeRef.current) failSession("The live session ended unexpectedly.");
     }
-    if (message.state === "error") {
-      setError(message.error ?? "The transcription session could not continue.");
+  }
+
+  async function prepare() {
+    if (sessionId || runState === "preparing" || runState === "starting" || runState === "live") return;
+    setRunState("preparing");
+    setError("");
+    setSessionId("");
+    setFinals([]);
+    setPartial("");
+    setPartialQuran(false);
+    setElapsed(0);
+    setMicLevel(0);
+    setBytesSent(0);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
+        throw new Error("A secure browser with microphone and AudioWorklet support is required.");
+      }
+      const microphoneCheck = await navigator.mediaDevices.getUserMedia({ audio: true });
+      microphoneCheck.getTracks().forEach((track) => track.stop());
+      const endpoints = browserEndpoints();
+      const response = await fetch(`${endpoints.api}/api/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceLanguage: "ar", targetLanguages: ["en"] }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const session = (await response.json()) as Session;
+      setSessionId(session.id);
+      setRunState("idle");
+    } catch (caught) {
+      setSessionId("");
+      setError(caught instanceof Error ? caught.message : "Unable to prepare a session.");
       setRunState("error");
-      endedResolverRef.current?.();
-      endedResolverRef.current = null;
-    }
-    if (message.state === "ended") {
-      endedResolverRef.current?.();
-      endedResolverRef.current = null;
     }
   }
 
   async function start() {
-    const targetLanguages = targetLanguagesInput
-      .split(",")
-      .map((language) => language.trim().toLowerCase())
-      .filter(Boolean);
-
-    if (targetLanguages.length === 0) {
-      setError("Add at least one translation language before starting.");
-      setRunState("error");
-      return;
-    }
-
+    if (!sessionId || runState === "starting" || runState === "stopping" || runState === "live") return;
     setRunState("starting");
     setError("");
-    setPartial("");
     setFinals([]);
+    setPartial("");
+    setPartialQuran(false);
+    setRecitationMode(false);
+    setRecitationPending(null);
+    setElapsed(0);
     setMicLevel(0);
     setBytesSent(0);
-
     try {
-      const response = await fetch(`${API_URL}/api/sessions`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sourceLanguage: "ar", targetLanguages }),
-      });
-      if (!response.ok) throw new Error(`Session creation failed (${response.status}).`);
-
-      const session = (await response.json()) as Session;
-      setSessionId(session.id);
-      const viewer = new CaptionStream(WS_URL, session.id, "viewer");
-      const speaker = new CaptionStream(WS_URL, session.id, "speaker");
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access requires a secure browser connection.");
+      const endpoints = browserEndpoints();
+      const session = { id: sessionId };
+      const viewer = new CaptionStream(endpoints.ws, session.id, "viewer");
+      const speaker = new CaptionStream(endpoints.ws, session.id, "speaker");
       viewerRef.current = viewer;
       speakerRef.current = speaker;
 
-      await new Promise<void>((resolve, reject) => {
-        let viewerOpen = false;
-        let speakerOpen = false;
-        const ready = () => { if (viewerOpen && speakerOpen) resolve(); };
-        const fail = () => reject(new Error("A live connection could not be established."));
-        viewer.connect({ onMessage: handleMessage, onOpen: () => { viewerOpen = true; ready(); }, onError: fail });
-        speaker.connect({ onMessage: handleMessage, onOpen: () => { speakerOpen = true; ready(); }, onError: fail });
+      let acknowledge = false;
+      const liveSignal = new Promise<void>((resolve, reject) => {
+        liveResolverRef.current = { resolve: () => { acknowledge = true; resolve(); }, reject };
       });
-
+      // A rejection that arrives while the sockets are opening is handled when awaited below.
+      void liveSignal.catch(() => undefined);
+      const connect = (stream: CaptionStream) => new Promise<void>((resolve, reject) => {
+        let opened = false;
+        stream.connect({
+          onMessage: handleMessage,
+          onOpen: () => { opened = true; resolve(); },
+          onError: () => { if (!opened) reject(new Error("A live connection could not be established.")); else failSession("The live connection was interrupted."); },
+          onClose: () => { if (!opened) reject(new Error("The live connection closed during setup.")); else if (activeRef.current) failSession("The live connection was interrupted."); },
+        });
+      });
+      await connect(viewer);
+      await connect(speaker);
+      await Promise.race([
+        liveSignal,
+        new Promise<void>((_, reject) => window.setTimeout(() => reject(new Error("Timed out waiting for transcription to start.")), 15000)),
+      ]).catch(async (caught: unknown) => {
+        if (!(caught instanceof Error) || caught.message !== "Timed out waiting for transcription to start.") throw caught;
+        // The viewer can miss an early broadcast; the session record is authoritative.
+        const statusResponse = await fetch(`${endpoints.api}/api/sessions/${session.id}`);
+        if (!statusResponse.ok || (await statusResponse.json() as Session).status !== "live") throw caught;
+      });
+      if (!acknowledge) liveResolverRef.current = null;
+      if (recitationArmed) {
+        setRecitationPending(true);
+        const confirmed = new Promise<void>((resolve) => {
+          recitationResolverRef.current = { desired: true, resolve };
+        });
+        if (!speaker.send({ type: "session.recitation", sessionId: session.id, active: true })) {
+          throw new Error("Could not arm Quran mode before microphone capture.");
+        }
+        await Promise.race([
+          confirmed,
+          new Promise<void>((_, reject) => window.setTimeout(() => reject(new Error("Quran mode was not confirmed before microphone capture.")), 5000)),
+        ]);
+      }
       const microphone = new PcmMicrophone();
       microphoneRef.current = microphone;
       await microphone.start(
-        (chunk) => { speaker.sendAudio(chunk); },
+        (chunk) => { if (!speaker.sendAudio(chunk)) failSession("Audio stopped reaching the transcription server."); },
         (stats) => { setMicLevel(stats.level); setBytesSent(stats.bytesSent); },
       );
+      activeRef.current = true;
       setRunState("live");
     } catch (caught) {
-      await cleanUp(false);
-      setError(caught instanceof Error ? caught.message : "Unable to start the live session.");
+      liveResolverRef.current = null;
+      recitationResolverRef.current = null;
+      setRecitationPending(null);
+      await cleanUp(true);
+      setSessionId("");
+      setError(caught instanceof Error ? caught.message : "Unable to start the Arabic translation.");
       setRunState("error");
     }
   }
 
   async function stop() {
+    if (runState !== "live") return;
+    activeRef.current = false;
     setRunState("stopping");
-    await microphoneRef.current?.stop();
-    microphoneRef.current = null;
-    const ended = new Promise<void>((resolve) => { endedResolverRef.current = resolve; });
-    speakerRef.current?.close(true);
-    speakerRef.current = null;
-    await Promise.race([ended, new Promise<void>((resolve) => window.setTimeout(resolve, 10_000))]);
-    viewerRef.current?.close();
-    viewerRef.current = null;
-    endedResolverRef.current = null;
-    setRunState("idle");
+    try {
+      await microphoneRef.current?.stop();
+      microphoneRef.current = null;
+      const ended = new Promise<void>((resolve) => { endedResolverRef.current = resolve; });
+      speakerRef.current?.close(true);
+      speakerRef.current = null;
+      await Promise.race([ended, new Promise<void>((resolve) => window.setTimeout(resolve, 10000))]);
+      viewerRef.current?.close();
+      viewerRef.current = null;
+      endedResolverRef.current = null;
+      setRunState("idle");
+      setSessionId("");
+      setRecitationMode(false);
+      setRecitationArmed(false);
+      setRecitationPending(null);
+    } catch (caught) {
+      await cleanUp(false);
+      setError(caught instanceof Error ? caught.message : "Could not end the session cleanly.");
+      setRunState("error");
+    }
   }
 
-  async function copyLink(kind: "join" | "display", value: string) {
+  function toggleRecitation() {
+    if (recitationPending !== null) return;
+    if (!isLive) { setRecitationArmed((armed) => !armed); return; }
+    const requested = !recitationMode;
+    if (!speakerRef.current?.send({ type: "session.recitation", sessionId, active: requested })) {
+      setError("Quran mode could not reach the live session. Check the connection.");
+      return;
+    }
+    setError("");
+    setRecitationPending(requested);
+    recitationTimerRef.current = setTimeout(() => {
+      setRecitationPending(null);
+      setError("Quran mode was not confirmed by the server. Please try again.");
+      recitationTimerRef.current = null;
+    }, 5000);
+  }
+
+  async function copyLink(value: string) {
     try {
       await navigator.clipboard.writeText(value);
-      setCopied(kind);
-      window.setTimeout(() => setCopied(""), 1800);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
     } catch {
       setError("Could not copy the link. Please select it manually.");
     }
   }
 
-  const isBusy = runState === "starting" || runState === "stopping";
   const isLive = runState === "live";
-  const latestFinal = finals.at(-1);
-  const previousFinal = finals.at(-2);
-  const targetLanguages = targetLanguagesInput.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
-  const primaryLanguage = targetLanguages[0] ?? "en";
-  const attendeeUrl = sessionId ? `${JOIN_URL}/join/${sessionId}` : "";
-  const displayUrl = sessionId ? `${JOIN_URL}/display/${sessionId}` : "";
-
-  const sessionButton = isLive
-    ? { label: "End session", className: "bg-[#3a1f1c] text-[#e5533d] hover:bg-[#482723]" }
-    : { label: runState === "starting" ? "Starting…" : runState === "stopping" ? "Ending…" : "Start session", className: "bg-[#d4a94f] text-[#12201b] hover:bg-[#e6c374]" };
+  const isBusy = runState === "preparing" || runState === "starting" || runState === "stopping";
+  const latest = finals.at(-1);
+  const previous = finals.at(-2);
+  const attendeeUrl = siteOrigin && sessionId ? `${siteOrigin}/join/${sessionId}` : "";
+  const displayUrl = siteOrigin && sessionId ? `${siteOrigin}/display/${sessionId}` : "";
+  const isLoopback = siteOrigin ? /https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(siteOrigin) : false;
 
   return (
     <main className="min-h-[100dvh] bg-[#0b1512] text-[#f5f2ea]">
-      <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1400px] flex-col lg:flex-row">
-
-        {/* Sidebar ------------------------------------------------------- */}
-        <aside className="flex flex-col gap-6 border-b border-[#1e332c] bg-[#0e1a16] p-5 lg:w-[280px] lg:shrink-0 lg:border-b-0 lg:border-r lg:p-6">
+      <div className="mx-auto grid min-h-[100dvh] max-w-[1500px] lg:grid-cols-[310px_minmax(0,1fr)]">
+        <aside className="flex flex-col gap-7 border-b border-[#2a4139] bg-[#0e1a16] p-5 lg:border-b-0 lg:border-r lg:p-7">
           <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#d4a94f] text-xl text-[#12201b]">ت</div>
-            <div>
-              <p className="text-[15px] font-bold leading-tight">Tadabbur</p>
-              <p className="text-xs text-[#6d8177]">Live khutbah translation</p>
-            </div>
+            <div className="grid h-11 w-11 place-items-center rounded-xl bg-[#d4a94f] font-arabic text-2xl font-bold text-[#12201b]" aria-hidden="true">ت</div>
+            <div><p className="text-lg font-bold">Tadabbur</p><p className="text-xs text-[#9db3aa]">Friday khutbah translation</p></div>
           </div>
-
           <div>
-            <p className="text-[15px] font-bold leading-tight">Jummah Session</p>
-            <p className="mt-1 text-xs text-[#6d8177]">Al-Noor Masjid · {todayLabel()}</p>
+            <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#d4a94f]">Operator controls</p>
+            <h1 className="mt-2 text-2xl font-semibold leading-tight">Bridge the Arabic khutbah</h1>
+            <p className="mt-3 text-sm leading-relaxed text-[#9db3aa]">Prepare during the English khutbah, share the links, then start translation when the Arabic khutbah begins. Preparation briefly checks microphone access without broadcasting audio.</p>
           </div>
-
-          <label className="block">
-            <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[.08em] text-[#5c6f65]">Translation languages</span>
-            <input
-              value={targetLanguagesInput}
-              onChange={(event) => setTargetLanguagesInput(event.target.value)}
-              disabled={isLive || isBusy}
-              placeholder="en, ur"
-              aria-label="Translation languages"
-              className="w-full rounded-lg border border-[#2a4139] bg-[#16241f] px-3 py-2.5 text-sm text-[#e6ded0] outline-none transition placeholder:text-[#5c6f65] focus:border-[#d4a94f] disabled:cursor-not-allowed disabled:opacity-60"
-            />
-          </label>
-
+          <div className="rounded-xl border border-[#2a4139] bg-[#12201b] p-4">
+            <p className="text-xs font-semibold uppercase tracking-[.1em] text-[#9db3aa]">This session</p>
+            <div className="mt-3 flex items-center justify-between gap-3 text-sm"><span>Spoken language</span><strong>Arabic</strong></div>
+            <div className="mt-3 flex items-center justify-between gap-3 text-sm"><span>Displayed translation</span><strong>English</strong></div>
+            <p className="mt-4 border-t border-[#2a4139] pt-3 text-xs leading-relaxed text-[#9db3aa]">Quran recitation is identified and shown without machine translation.</p>
+          </div>
           <button
             type="button"
-            onClick={isLive ? stop : start}
+            onClick={() => void (isLive ? stop() : sessionId ? start() : prepare())}
             disabled={isBusy}
-            className={`rounded-[10px] px-4 py-3 text-[13px] font-bold transition disabled:cursor-not-allowed disabled:opacity-70 ${sessionButton.className}`}
+            className={`min-h-12 rounded-xl px-4 py-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-wait disabled:opacity-70 ${isLive ? "bg-[#5a302b] text-[#fff1ed] hover:bg-[#734039]" : "bg-[#d4a94f] text-[#12201b] hover:bg-[#e6c374]"}`}
           >
-            {sessionButton.label}
+            {isLive ? "End Arabic translation" : runState === "preparing" ? "Preparing session…" : runState === "starting" ? "Starting transcription…" : runState === "stopping" ? "Ending session…" : sessionId ? "Start Arabic translation" : "Prepare session"}
           </button>
-
-          {error && (
-            <p role="alert" className="rounded-lg border border-[#3a1f1c] bg-[#1c110f] px-3 py-2.5 text-xs leading-relaxed text-[#f2b6ab]">
-              {error}
-            </p>
-          )}
-
-          <div>
-            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[.08em] text-[#5c6f65]">Output languages</p>
-            <div className="flex flex-col gap-2">
-              {targetLanguages.length === 0 ? (
-                <p className="text-xs text-[#5c6f65]">Add a language to begin.</p>
-              ) : (
-                targetLanguages.map((lang) => (
-                  <div key={lang} className="flex items-center justify-between rounded-[9px] border border-[#1e332c] bg-[#16241f] px-3 py-2.5">
-                    <span className="text-[13px] font-medium text-[#e6ded0]">{languageName(lang)}</span>
-                    <span className={`h-1.5 w-1.5 rounded-full ${isLive ? "bg-[#4caf7d]" : "bg-[#5c6f65]"}`} />
-                  </div>
-                ))
-              )}
+          <div className="rounded-xl border border-[#d4a94f]/40 bg-[#d4a94f]/5 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-[#f5f2ea]">Quran mode</p>
+                <p className="mt-1 text-xs leading-relaxed text-[#9db3aa]">Use during recitation if automatic detection misses a verse.</p>
+              </div>
+              <button type="button" role="switch" aria-checked={recitationMode || recitationArmed} aria-label="Quran mode" onClick={toggleRecitation} disabled={isBusy || recitationPending !== null} className={`relative h-8 w-14 shrink-0 rounded-full border transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-not-allowed disabled:opacity-50 ${recitationMode || recitationArmed ? "border-[#d4a94f] bg-[#d4a94f]" : "border-[#4b6258] bg-[#2a4139]"}`}>
+                <span className={`absolute top-1 h-5 w-5 rounded-full bg-[#0b1512] transition-all ${recitationMode || recitationArmed ? "left-7" : "left-1"}`} />
+              </button>
             </div>
+              <p role="status" className="mt-3 text-xs font-medium text-[#e6c374]">{recitationPending !== null ? "Waiting for server confirmation…" : recitationMode ? "Active · public screens show “Quran being read”" : recitationArmed ? "Armed · Quran mode will start before the microphone" : isLive ? "Off · automatic detection remains active" : "Switch on before starting if recitation opens the Arabic khutbah"}</p>
           </div>
-
+          {error && <p role="alert" className="rounded-xl border border-[#a85d4f] bg-[#2a1715] p-3 text-sm leading-relaxed text-[#ffd9d1]">{error}</p>}
           <div className="mt-auto">
-            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[.08em] text-[#5c6f65]">Attendee access</p>
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[.1em] text-[#9db3aa]">Share live captions</p>
             {attendeeUrl ? (
-              <div className="flex items-center gap-3 rounded-xl border border-[#1e332c] bg-[#12201b] p-3">
-                <div className="rounded-md bg-white p-1.5">
-                  <QRCodeSVG value={attendeeUrl} size={52} marginSize={0} level="M" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[11px] leading-tight text-[#7c9186]">Scan or share to join on a phone.</p>
-                  <div className="mt-2 flex gap-1.5">
-                    <button type="button" onClick={() => void copyLink("join", attendeeUrl)} className="rounded-md border border-[#2a4139] px-2.5 py-1.5 text-[11px] font-semibold text-[#d4a94f] transition hover:bg-[#16241f]">
-                      {copied === "join" ? "Copied" : "Copy link"}
-                    </button>
-                    {displayUrl && (
-                      <a href={displayUrl} target="_blank" rel="noreferrer" className="rounded-md border border-[#2a4139] px-2.5 py-1.5 text-[11px] font-semibold text-[#c9d6cf] transition hover:bg-[#16241f]">
-                        Open TV
-                      </a>
-                    )}
-                  </div>
+              <div className="rounded-xl border border-[#2a4139] bg-[#12201b] p-4">
+                {!isLoopback && <div className="mb-4 inline-block rounded-lg bg-white p-2"><QRCodeSVG value={attendeeUrl} size={96} marginSize={0} level="M" /></div>}
+                <p className="break-all text-xs leading-relaxed text-[#c9d6cf]">{attendeeUrl}</p>
+                {isLoopback && <p className="mt-3 text-xs leading-relaxed text-[#e6c374]">This localhost link only works on this computer. Open Tadabbur using a network address or set a public join URL before sharing it with attendees.</p>}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void copyLink(attendeeUrl)} className="rounded-lg border border-[#3a5648] px-3 py-2 text-xs font-semibold text-[#e6c374] hover:bg-[#1c332a]">{copied ? "Copied" : "Copy attendee link"}</button>
+                  <a href={displayUrl} target="_blank" rel="noreferrer" className="rounded-lg border border-[#3a5648] px-3 py-2 text-xs font-semibold text-[#e6ded0] hover:bg-[#1c332a]">Open projector ↗</a>
                 </div>
               </div>
-            ) : (
-              <p className="rounded-xl border border-[#1e332c] bg-[#12201b] px-3 py-3 text-xs leading-relaxed text-[#6d8177]">
-                Start a session to generate the attendee QR code and projector link.
-              </p>
-            )}
+            ) : <p className="rounded-xl border border-[#2a4139] bg-[#12201b] p-4 text-sm leading-relaxed text-[#9db3aa]">Prepare a session to get the attendee link and projector display before the Arabic khutbah.</p>}
+            <a href="https://tanzil.net" target="_blank" rel="noreferrer" className="mt-4 inline-block text-xs text-[#9db3aa] underline underline-offset-2">Quran text reference: Tanzil Project</a>
           </div>
         </aside>
 
-        {/* Main ---------------------------------------------------------- */}
-        <section className="flex min-w-0 flex-1 flex-col">
-          {/* Status bar */}
-          <div className="flex items-center justify-between gap-4 border-b border-[#1e332c] px-5 py-4 sm:px-7">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${isLive ? "bg-[#e5533d] livepulse" : runState === "error" ? "bg-[#e5533d]" : "bg-[#5c6f65]"}`} />
-              <span className="truncate text-[12px] font-semibold uppercase tracking-[.06em] text-[#c9d6cf]">{micCopy(runState)}</span>
-              {/* Compact live input meter */}
-              <div className="ml-1 hidden items-end gap-[2px] sm:flex" aria-hidden>
-                {Array.from({ length: 10 }, (_, index) => {
-                  const active = isLive && micLevel * 6 > (index + 1) / 10;
-                  return <span key={index} className={`w-[3px] rounded-full transition-all duration-75 ${active ? "bg-[#d4a94f]" : "bg-white/10"}`} style={{ height: `${6 + (index % 4) * 4}px` }} />;
-                })}
-              </div>
+        <section className="flex min-w-0 flex-col">
+          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1e332c] px-5 py-5 sm:px-8">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#9db3aa]">Live monitor</p>
+              <h2 className="mt-1 text-xl font-semibold">Arabic → English</h2>
             </div>
-            <div className="flex items-center gap-4">
-              {isLive && <span className="hidden text-[11px] text-[#5c6f65] sm:inline">{Math.round(bytesSent / 1024)} KB sent</span>}
-              <span className="text-[13px] font-semibold tabular-nums text-[#9db3aa]">{formatElapsed(elapsed)}</span>
+            <div className="flex items-center gap-3">
+              <span className={`h-2.5 w-2.5 rounded-full ${isLive ? "bg-[#e5533d] livepulse" : runState === "error" ? "bg-[#e5533d]" : "bg-[#7c9186]"}`} aria-hidden="true" />
+              <span role="status" className="text-sm font-semibold text-[#c9d6cf]">{isLive ? "Microphone live" : isBusy ? runState === "preparing" ? "Preparing" : runState === "starting" ? "Connecting" : "Ending" : runState === "error" ? "Needs attention" : sessionId ? "Prepared · mic off" : "Ready to prepare"}</span>
+              <span className="ml-2 font-mono text-sm tabular-nums text-[#9db3aa]">{formatElapsed(elapsed)}</span>
             </div>
-          </div>
-
-          {/* Two-pane transcript */}
-          <div className="grid flex-1 grid-cols-1 gap-px bg-[#1e332c] md:grid-cols-2">
-            {/* Arabic (live) */}
-            <div className="flex flex-col gap-4 bg-[#0e1a16] p-5 sm:p-7 scroll-quiet md:overflow-auto">
-              <p className="text-[11px] font-semibold uppercase tracking-[.08em] text-[#5c6f65]">Arabic transcript (live)</p>
-              <div dir="rtl" lang="ar" aria-live="polite" className="font-arabic text-[19px] font-medium leading-[2] text-[#e6ded0] sm:text-[22px]">
-                {partial || latestFinal?.source || <span className="text-[#5c6f65]">بانتظار بداية الخطبة</span>}
+          </header>
+          <div className="grid flex-1 md:grid-cols-2">
+            <div className="flex min-h-[280px] flex-col border-b border-[#1e332c] p-5 md:border-b-0 md:border-r sm:p-8">
+              <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#9db3aa]">Arabic · operator monitor</p>
+              <div dir="rtl" lang="ar" className="mt-9 font-arabic text-[clamp(1.55rem,2.6vw,2.8rem)] leading-[1.8] text-[#f5f2ea]" aria-live="polite">
+                {partial || latest?.source || <span className="text-[#9db3aa]">بانتظار بداية الخطبة العربية</span>}
               </div>
-              {previousFinal && (
-                <div dir="rtl" lang="ar" className="font-arabic text-[16px] leading-[2] text-[#5c6f65] sm:text-[17px]">
-                  {previousFinal.source}
+              {partial && <p className="mt-3 text-xs text-[#e6c374]">In progress · visible to operator only</p>}
+              {!partial && previous && <p dir="rtl" lang="ar" className="mt-8 border-t border-[#2a4139] pt-6 font-arabic text-xl leading-[1.8] text-[#9db3aa]">{previous.source}</p>}
+              <div className="mt-auto pt-8">
+                <div className="flex h-7 items-end gap-1" aria-label={isLive ? "Microphone activity" : "Microphone off"}>
+                  {Array.from({ length: 20 }, (_, index) => <span key={index} className={`w-1.5 rounded-full transition-all duration-100 ${isLive && micLevel * 8 > (index + 1) / 20 ? "bg-[#d4a94f]" : "bg-[#2a4139]"}`} style={{ height: `${8 + (index % 5) * 4}px` }} />)}
                 </div>
-              )}
-            </div>
-
-            {/* Translation */}
-            <div className="flex flex-col gap-4 bg-[#0e1a16] p-5 sm:p-7 scroll-quiet md:overflow-auto">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-[.08em] text-[#5c6f65]">{languageName(primaryLanguage)} translation</p>
-                <span className="rounded-full bg-[#16241f] px-2 py-0.5 text-[10px] font-semibold text-[#7c9186]">{primaryLanguage.toUpperCase()}</span>
+                <p className="mt-2 text-xs text-[#9db3aa]">{isLive ? `Microphone connected · ${Math.round(bytesSent / 1024)} KB sent` : "Microphone starts when you go live"}</p>
               </div>
-              {latestFinal?.isQuranicHadithCandidate ? (
-                <div className="rounded-[10px] border border-[#2a4139] bg-[#16241f] px-3.5 py-3 text-[15px] leading-relaxed text-[#e6c374]">
-                  Scriptural content may be present. Machine translation is withheld to protect the integrity of the text.
-                </div>
+            </div>
+            <div className="flex min-h-[280px] flex-col p-5 sm:p-8">
+              <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#9db3aa]">English · public preview</p>
+              {recitationMode || partialQuran || (!partial && latest?.isQuranicCandidate) ? (
+                <div className="mt-9 rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 p-7 text-center text-2xl font-semibold text-[#f5f2ea]">Quran being read</div>
+              ) : !partial && latest?.isQuranicHadithCandidate ? (
+                <div className="mt-9 rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 p-7 text-center text-xl font-semibold text-[#f5f2ea]">Scriptural passage being read</div>
               ) : (
-                <div className="rounded-[10px] border border-[#2a4139] bg-[#16241f] px-3.5 py-3 text-[16px] font-medium leading-[1.7] text-[#e6ded0]">
-                  {latestFinal?.translations[primaryLanguage] || <span className="text-[#5c6f65]">Translation appears after a complete phrase.</span>}
+                <div className="mt-9 rounded-2xl border border-[#2a4139] bg-[#12201b] p-6 text-[clamp(1.2rem,2vw,2rem)] font-medium leading-[1.5] text-[#f5f2ea]">
+                  {partial ? <span className="text-[#9db3aa]">Listening for the next phrase…</span> : latest?.translations.en || <span className="text-[#9db3aa]">English captions appear here after each complete Arabic phrase.</span>}
                 </div>
               )}
-              {previousFinal && !previousFinal.isQuranicHadithCandidate && previousFinal.translations[primaryLanguage] && (
-                <div className="text-[15px] leading-[1.7] text-[#5c6f65]">
-                  {previousFinal.translations[primaryLanguage]}
-                </div>
-              )}
+              {!recitationMode && !partial && previous && !previous.isQuranicHadithCandidate && <p className="mt-7 border-t border-[#2a4139] pt-6 text-lg leading-relaxed text-[#9db3aa]">{previous.translations.en}</p>}
+              <p className="mt-auto pt-8 text-xs leading-relaxed text-[#9db3aa]">Public screens show completed, checked phrases only. Partial Arabic is shown here for the operator.</p>
             </div>
           </div>
         </section>

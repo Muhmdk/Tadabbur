@@ -4,12 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import type { Language, ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
+import CaptionRenderer from "@/components/CaptionRenderer";
+import { browserEndpoints } from "@/lib/endpoints";
+import { nextPartialCaptionState, selectPublicCaption } from "@/lib/public-caption";
 import { CaptionStream } from "@/lib/ws-client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const WS_URL = process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://localhost:8000";
 
-type ViewerState = "connecting" | "waiting" | "live" | "ended" | "error";
+type ViewerState = "connecting" | "reconnecting" | "waiting" | "live" | "ended" | "error";
 
 const languageNames: Record<string, string> = { en: "English", ur: "Urdu", fr: "French", tr: "Turkish", so: "Somali" };
 function languageName(language: string): string {
@@ -18,6 +19,7 @@ function languageName(language: string): string {
 
 function stateLabel(state: ViewerState): string {
   if (state === "connecting") return "Connecting";
+  if (state === "reconnecting") return "Reconnecting";
   if (state === "waiting") return "Waiting for the khutbah";
   if (state === "live") return "Live";
   if (state === "ended") return "Session ended";
@@ -34,7 +36,8 @@ export default function MobileViewerPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [language, setLanguage] = useState<Language>("en");
   const [viewerState, setViewerState] = useState<ViewerState>("connecting");
-  const [partial, setPartial] = useState("");
+  const [partialState, setPartialState] = useState<"none" | "listening" | "quran">("none");
+  const [manualQuran, setManualQuran] = useState(false);
   const [captions, setCaptions] = useState<ServerCaptionFinal[]>([]);
   const [error, setError] = useState("");
   const [langMenuOpen, setLangMenuOpen] = useState(false);
@@ -44,18 +47,28 @@ export default function MobileViewerPage() {
   useEffect(() => {
     let stream: CaptionStream | null = null;
     let cancelled = false;
+    let ended = false;
+    let terminalError = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
 
     function handleMessage(message: ServerMessage) {
       if (message.type === "caption.partial") {
-        setPartial(message.text);
+        setPartialState((current) => nextPartialCaptionState(current, Boolean(message.isQuranicCandidate)));
         setViewerState("live");
       } else if (message.type === "caption.final") {
-        setCaptions((current) => [...current.slice(-19), message]);
-        setPartial("");
+        setCaptions((current) => current.some((caption) => caption.chunkId === message.chunkId) ? current : [...current.slice(-19), message]);
+        setPartialState("none");
         setViewerState("live");
+      } else if (message.type === "recitation.state") {
+        setManualQuran(message.active);
+        setCaptions([]);
+        setPartialState("none");
       } else if (message.state === "ended") {
+        ended = true;
         setViewerState("ended");
       } else if (message.state === "error") {
+        terminalError = true;
         setError(message.error ?? "This session encountered an error.");
         setViewerState("error");
       } else if (message.state === "live") {
@@ -63,31 +76,51 @@ export default function MobileViewerPage() {
       }
     }
 
+    function retry(owner?: CaptionStream) {
+      if (owner && owner !== stream) return;
+      if (cancelled || ended || terminalError || retryTimer) return;
+      const old = stream;
+      stream = null;
+      old?.close();
+      setPartialState("listening");
+      setViewerState("reconnecting");
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void connect();
+      }, Math.min(8000, 1000 * 2 ** attempts++));
+    }
+
     async function connect() {
       try {
-        const response = await fetch(`${API_URL}/api/sessions/${sessionId}`);
-        if (!response.ok) throw new Error(response.status === 404 ? "This session is unavailable." : "Could not load this session.");
+        const endpoints = browserEndpoints();
+        const response = await fetch(`${endpoints.api}/api/sessions/${sessionId}`);
+        if (response.status === 404) { terminalError = true; throw new Error("This session is unavailable."); }
+        if (!response.ok) throw new Error("Could not load this session.");
         const nextSession = (await response.json()) as Session;
         if (cancelled) return;
         setSession(nextSession);
         setLanguage(nextSession.targetLanguages[0] ?? "en");
-        stream = new CaptionStream(WS_URL, sessionId, "viewer");
-        stream.connect({
-          onOpen: () => setViewerState("waiting"),
-          onMessage: handleMessage,
-          onError: () => { setError("The live caption connection failed."); setViewerState("error"); },
-          onClose: () => setViewerState((current) => current === "ended" || current === "error" ? current : "error"),
+        if (nextSession.status === "ended") { ended = true; setViewerState("ended"); return; }
+        const nextStream = new CaptionStream(endpoints.ws, sessionId, "viewer");
+        stream = nextStream;
+        nextStream.connect({
+          onOpen: () => { if (stream !== nextStream) return; attempts = 0; setError(""); setViewerState(nextSession.status === "live" ? "live" : "waiting"); },
+          onMessage: (message) => { if (stream === nextStream) handleMessage(message); },
+          onError: () => retry(nextStream),
+          onClose: () => retry(nextStream),
         });
       } catch (caught) {
         if (!cancelled) {
-          setError(caught instanceof Error ? caught.message : "Could not join this session.");
-          setViewerState("error");
+          if (terminalError) {
+            setError(caught instanceof Error ? caught.message : "Could not join this session.");
+            setViewerState("error");
+          } else retry();
         }
       }
     }
 
     void connect();
-    return () => { cancelled = true; stream?.close(); };
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); stream?.close(); };
   }, [sessionId]);
 
   // Dismiss the language menu on outside click.
@@ -102,7 +135,10 @@ export default function MobileViewerPage() {
 
   const latest = captions.at(-1);
   const previous = useMemo(() => captions.slice(0, -1).reverse(), [captions]);
-  const isScripture = latest?.isQuranicHadithCandidate;
+  const publicCaption = selectPublicCaption(latest ?? null, partialState, manualQuran);
+  const visibleCaption = publicCaption.caption;
+  const isQuran = publicCaption.isQuranActive;
+  const isScripture = visibleCaption?.isQuranicHadithCandidate;
   const languages = session?.targetLanguages ?? [];
   const scale = SCALES[scaleIndex];
   const isLive = viewerState === "live";
@@ -114,7 +150,7 @@ export default function MobileViewerPage() {
         {/* Header --------------------------------------------------------- */}
         <header className="flex items-center justify-between gap-3 border-b border-[#1e332c] px-5 py-3.5">
           <div>
-            <div className="text-[15px] font-bold leading-tight text-[#f5f2ea]">Al-Noor Masjid</div>
+            <div className="text-[15px] font-bold leading-tight text-[#f5f2ea]">Tadabbur · Friday khutbah</div>
             <div className="mt-1 flex items-center gap-1.5">
               <span className={`h-1.5 w-1.5 rounded-full bg-[#e5533d] ${isLive ? "livepulse" : "opacity-40"}`} />
               <span className="text-[10px] font-semibold uppercase tracking-[.08em] text-[#e5533d]">{stateLabel(viewerState)}</span>
@@ -161,53 +197,28 @@ export default function MobileViewerPage() {
             <div role="alert" className="rounded-2xl border border-[#3a1f1c] bg-[#1c110f] p-5 text-sm leading-relaxed text-[#f2b6ab]">
               {error}
             </div>
-          ) : viewerState === "ended" && !latest ? (
+          ) : viewerState === "ended" ? (
             <div className="rounded-2xl border border-[#2a4139] bg-[#12201b] p-6">
               <p dir="rtl" className="font-arabic text-3xl text-[#f7ead0]">جزاكم الله خيراً</p>
               <p className="mt-4 text-base leading-relaxed text-[#9db3aa]">This live translation session has ended.</p>
             </div>
           ) : (
             <>
-              {/* Current phrase card */}
-              <div
+              <CaptionRenderer
                 key={latest?.chunkId ?? "pending"}
-                className="rise-in rounded-2xl border border-[#2a4139] p-5"
-                style={{ background: "linear-gradient(180deg,#182b24,#12201b)" }}
-              >
-                <div
-                  dir="rtl"
-                  lang="ar"
-                  aria-live="polite"
-                  className="font-arabic font-medium text-[#f5f2ea]"
-                  style={{ fontSize: `${1.4 * scale}rem`, lineHeight: 1.7 }}
-                >
-                  {partial || latest?.source || <span className="text-[#5c6f65]">بانتظار الخطبة</span>}
-                </div>
-                {isScripture ? (
-                  <div
-                    className="mt-3 border-l-2 border-[#d4a94f] pl-3 font-medium text-[#e6c374]"
-                    style={{ fontSize: `${1.0 * scale}rem`, lineHeight: 1.5 }}
-                  >
-                    This may be Quranic or hadith content — machine translation is intentionally withheld.
-                  </div>
-                ) : (
-                  <div
-                    aria-live="polite"
-                    className="mt-3 font-medium text-[#d4a94f]"
-                    style={{ fontSize: `${1.06 * scale}rem`, lineHeight: 1.5 }}
-                  >
-                    {latest?.translations[language] || (
-                      <span className="text-[#5c6f65]">{partial ? "Listening… translation appears once the phrase is complete." : "Waiting for a complete phrase…"}</span>
-                    )}
-                  </div>
-                )}
-              </div>
+                variant="attendee"
+                scale={scale}
+                caption={visibleCaption ?? null}
+                targetLanguage={language}
+                isQuranActive={publicCaption.isQuranActive}
+                waitingText={viewerState === "connecting" ? "Connecting to live captions…" : viewerState === "waiting" ? "Captions begin when the Arabic khutbah starts." : viewerState === "reconnecting" ? "Reconnecting to live captions…" : "Listening for the next phrase…"}
+              />
 
               {/* Faded history */}
-              {previous.map((caption, index) => (
+              {!isQuran && !isScripture && previous.map((caption, index) => (
                 <div key={caption.chunkId} className="px-1" style={{ opacity: Math.max(0.28, 0.62 - index * 0.16) }}>
                   <div className="text-[13px] leading-relaxed text-[#c9d6cf]">
-                    {caption.isQuranicHadithCandidate ? "Translation withheld for Quranic or hadith content." : caption.translations[language] || caption.source}
+                    {caption.isQuranicCandidate ? "Quran being read" : caption.isQuranicHadithCandidate ? "Scriptural passage being read" : caption.translations[language] || "Translation unavailable for this phrase."}
                   </div>
                 </div>
               ))}
@@ -216,9 +227,10 @@ export default function MobileViewerPage() {
         </main>
 
         {/* Footer --------------------------------------------------------- */}
-        <footer className="flex items-center justify-between border-t border-[#1e332c] px-5 py-4">
-          <div className="text-[11px] text-[#5c6f65]">
-            {isLive ? "Connected · low latency" : stateLabel(viewerState)}
+        <footer className="flex items-center justify-between gap-4 border-t border-[#1e332c] px-5 py-4">
+          <div className="text-[11px] leading-relaxed text-[#9db3aa]">
+            <div>{isLive ? "Live captions" : stateLabel(viewerState)}</div>
+            <a href="https://tanzil.net" target="_blank" rel="noreferrer" className="text-[#9db3aa] underline underline-offset-2">Quran text reference: Tanzil Project</a>
           </div>
           <div className="flex items-center gap-1.5">
             <button

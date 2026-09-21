@@ -1,8 +1,15 @@
 # Tadabbur
 
-Tadabbur provides real-time Arabic sermon transcription and translation. Audio
-from a speaker's browser is transcribed by Speechmatics, translated by DeepL,
-and broadcast to projector and read-only mobile viewers.
+Tadabbur helps attendees follow the Arabic portion of a Friday khutbah after
+the English portion. A volunteer starts the Arabic session from a browser;
+Speechmatics transcribes the speaker, a translation provider translates
+completed phrases, and the projector and optional phones receive the same
+live captions.
+
+When Quran recitation is identified, the public display shows **“Quran being
+read”** without machine translation. The operator can also turn on Quran mode
+manually for short or misheard verses. Automatic transcript matching is an aid,
+not a guarantee: use Quran mode whenever recitation is expected.
 
 ## Requirements
 
@@ -10,7 +17,7 @@ and broadcast to projector and read-only mobile viewers.
 - Node.js 20 or 22
 - Redis 7, locally or through Docker
 - Speechmatics API key
-- DeepL API key
+- DeepL API key or Google Cloud Translate service account
 
 ## Local Setup
 
@@ -19,20 +26,22 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 ```
 
-Add `SPEECHMATICS_API_KEY` and `DEEPL_API_KEY` to `backend/.env`.
+Add `SPEECHMATICS_API_KEY` and either `DEEPL_API_KEY` or
+`GOOGLE_APPLICATION_CREDENTIALS` to `backend/.env`. A live session cannot start
+without speech recognition and a translation provider.
 
-Install dependencies:
+Install dependencies (from the repository root):
 
 ```bash
 # Backend
 cd backend
 python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+.venv/bin/python -m pip install -e .   # macOS / Linux
+# .venv\Scripts\python.exe -m pip install -e .   # Windows PowerShell
 
 # Frontend
 cd ../frontend
-npm install
+npm ci
 ```
 
 Run Redis:
@@ -45,8 +54,8 @@ Run the backend and frontend in separate terminals:
 
 ```bash
 cd backend
-source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
+.venv/bin/python -m uvicorn app.main:app --reload --port 8000
+# Windows: .venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
 ```bash
@@ -54,8 +63,11 @@ cd frontend
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), start the microphone, and
-speak Arabic. The control screen shows live Arabic and English captions.
+Open [http://localhost:3000](http://localhost:3000). During the English part of
+the khutbah, prepare the projector and attendee link. Start Arabic translation
+when the Arabic portion begins. Turn on Quran mode before expected recitation;
+turn it off when ordinary Arabic speech resumes. End the session when the
+khutbah finishes.
 
 ## Architecture
 
@@ -64,7 +76,8 @@ Browser microphone
   -> FastAPI speaker WebSocket
   -> Speechmatics streaming ASR
   -> clause assembly
-  -> DeepL translation
+  -> Quran matching / operator Quran mode
+  -> DeepL translation (Google fallback when configured)
   -> Redis pub/sub
   -> projector and mobile viewer WebSockets
 ```
@@ -115,9 +128,13 @@ required.
 ## Notes
 
 - API keys and `.env` files must never be committed.
-- Quranic verses and hadith must not rely on machine translation. Candidate
-  content is suppressed until verified source matching and published
-  translations are integrated.
+- The Quran matcher uses the [Tanzil Project](https://tanzil.net/) Simple Clean
+  Arabic text as a reference. Its source license and copyright notice are
+  included with the corpus. A transcript can miss or alter a verse, especially
+  when it is short, so an operator should use Quran mode for known recitation.
+- Hadith identification and approved published translations are not yet
+  available. The existing candidate flag suppresses machine translation if a
+  future detector marks such content.
 - This is a working development prototype, not a production deployment.
 - See [`AGENTS.md`](./AGENTS.md) for engineering rules and
   [`BACKLOG.md`](./BACKLOG.md) for deferred product work.

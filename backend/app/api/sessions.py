@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
+from app.config import settings
 from app.models.contract import CreateSessionRequest, Session
 from app.store import sessions as session_store
 
@@ -17,6 +18,15 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 @router.post("", response_model=Session, status_code=201)
 async def create_session(body: CreateSessionRequest) -> Session:
+    if body.sourceLanguage != "ar" or body.targetLanguages != ["en"]:
+        raise HTTPException(
+            status_code=422,
+            detail="This deployment currently supports Arabic audio with English captions.",
+        )
+    if not settings.speechmatics_api_key:
+        raise HTTPException(status_code=503, detail="Speech transcription is not configured.")
+    if not (settings.deepl_api_key or settings.google_application_credentials):
+        raise HTTPException(status_code=503, detail="Translation is not configured.")
     session = Session(
         id=uuid.uuid4().hex,
         sourceLanguage=body.sourceLanguage,
