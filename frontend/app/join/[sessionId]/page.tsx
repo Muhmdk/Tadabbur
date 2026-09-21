@@ -158,18 +158,23 @@ export default function MobileViewerPage() {
           </div>
 
           <div ref={menuRef} className="relative">
-            <button
-              type="button"
-              onClick={() => setLangMenuOpen((open) => !open)}
-              disabled={languages.length === 0}
-              className="flex items-center gap-1.5 rounded-full border border-[#2a4139] bg-[#16241f] px-3.5 py-2 text-[13px] font-semibold text-[#d4a94f] transition hover:border-[#3a5648] disabled:opacity-60"
-              aria-haspopup="listbox"
-              aria-expanded={langMenuOpen}
-            >
-              <span>{languageName(language)}</span>
-              <span className="text-[9px]">▾</span>
-            </button>
-            {langMenuOpen && languages.length > 0 && (
+            {languages.length <= 1 ? (
+              <span className="flex items-center rounded-full border border-[#2a4139] bg-[#16241f] px-3.5 py-2 text-[13px] font-semibold text-[#d4a94f]" aria-label={`Caption language: ${languageName(language)}`}>
+                {languageName(language)}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setLangMenuOpen((open) => !open)}
+                className="flex items-center gap-1.5 rounded-full border border-[#2a4139] bg-[#16241f] px-3.5 py-2 text-[13px] font-semibold text-[#d4a94f] transition hover:border-[#3a5648]"
+                aria-haspopup="listbox"
+                aria-expanded={langMenuOpen}
+              >
+                <span>{languageName(language)}</span>
+                <span className="text-[9px]">▾</span>
+              </button>
+            )}
+            {langMenuOpen && languages.length > 1 && (
               <div
                 role="listbox"
                 className="absolute right-0 top-[42px] z-10 w-40 rounded-xl border border-[#2a4139] bg-[#16241f] p-1.5 shadow-[0_20px_40px_-10px_rgba(0,0,0,.6)]"

@@ -60,11 +60,11 @@ export default function CaptionRenderer({ caption, targetLanguage, waitingText =
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-[clamp(1rem,3.5vh,2rem)] text-center" aria-live="polite">
-      <div dir="rtl" lang={caption.sourceLang} className="max-w-[26ch] font-arabic font-medium leading-[1.65] text-[#f5f2ea]" style={{ fontSize: "clamp(1.6rem,4.1vw,4.5rem)" }}>
+      <div dir="rtl" lang={caption.sourceLang} className="max-w-[26ch] font-arabic font-medium leading-[1.6] text-[#f5f2ea]" style={{ fontSize: "clamp(1.6rem,4.6vw,5rem)" }}>
         {caption.source}
       </div>
       <div className="h-[2px] w-16 shrink-0 bg-[#d4a94f] opacity-70" aria-hidden="true" />
-      <div dir="auto" lang={targetLanguage} className="max-w-[36ch] font-medium leading-[1.5] text-[#e6ded0]" style={{ fontSize: "clamp(1.25rem,2.8vw,3rem)" }}>
+      <div dir="auto" lang={targetLanguage} className="max-w-[36ch] font-medium leading-[1.45] text-[#e6ded0]" style={{ fontSize: "clamp(1.25rem,3.25vw,3.75rem)" }}>
         {caption.translations[targetLanguage] || <span className="text-[#9db3aa]">Translation unavailable for this phrase.</span>}
       </div>
     </div>

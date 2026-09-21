@@ -6,6 +6,7 @@ import type { ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
 import { PcmMicrophone } from "@/lib/microphone";
 import { browserEndpoints } from "@/lib/endpoints";
+import { selectPublicCaption } from "@/lib/public-caption";
 import { CaptionStream } from "@/lib/ws-client";
 
 type RunState = "idle" | "preparing" | "starting" | "live" | "stopping" | "error";
@@ -86,7 +87,7 @@ export default function ControlPage() {
   function handleMessage(message: ServerMessage) {
     if (message.type === "caption.partial") {
       setPartial(message.text);
-      setPartialQuran(Boolean(message.isQuranicCandidate));
+      setPartialQuran((current) => current || Boolean(message.isQuranicCandidate));
     } else if (message.type === "caption.final") {
       setFinals((current) => [...current.slice(-29), message]);
       setPartial("");
@@ -244,6 +245,11 @@ export default function ControlPage() {
       endedResolverRef.current = null;
       setRunState("idle");
       setSessionId("");
+      setFinals([]);
+      setPartial("");
+      setPartialQuran(false);
+      setElapsed(0);
+      setMicLevel(0);
       setRecitationMode(false);
       setRecitationArmed(false);
       setRecitationPending(null);
@@ -285,14 +291,28 @@ export default function ControlPage() {
   const isBusy = runState === "preparing" || runState === "starting" || runState === "stopping";
   const latest = finals.at(-1);
   const previous = finals.at(-2);
+  const publicPreview = selectPublicCaption(
+    latest ?? null,
+    partialQuran ? "quran" : partial ? "listening" : "none",
+    recitationMode,
+  );
+  const publicQuranActive = publicPreview.isQuranActive;
   const attendeeUrl = siteOrigin && sessionId ? `${siteOrigin}/join/${sessionId}` : "";
   const displayUrl = siteOrigin && sessionId ? `${siteOrigin}/display/${sessionId}` : "";
   const isLoopback = siteOrigin ? /https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(siteOrigin) : false;
+  const activeStep = isLive ? 3 : sessionId ? 2 : 1;
+  const stepHint = activeStep === 1
+    ? "Prepare checks the microphone without broadcasting audio."
+    : activeStep === 2
+      ? isLoopback
+        ? "Open Tadabbur at a network address before sharing the phone link."
+        : "Open the projector and share the attendee link before Arabic begins."
+      : "Arabic translation is live. End it when the khutbah finishes.";
 
   return (
     <main className="min-h-[100dvh] bg-[#0b1512] text-[#f5f2ea]">
       <div className="mx-auto grid min-h-[100dvh] max-w-[1500px] lg:grid-cols-[310px_minmax(0,1fr)]">
-        <aside className="flex flex-col gap-7 border-b border-[#2a4139] bg-[#0e1a16] p-5 lg:border-b-0 lg:border-r lg:p-7">
+        <aside className="flex flex-col gap-5 border-b border-[#2a4139] bg-[#0e1a16] p-5 lg:h-[100dvh] lg:overflow-y-auto lg:overscroll-contain lg:border-b-0 lg:border-r lg:p-6">
           <div className="flex items-center gap-3">
             <div className="grid h-11 w-11 place-items-center rounded-xl bg-[#d4a94f] font-arabic text-2xl font-bold text-[#12201b]" aria-hidden="true">ت</div>
             <div><p className="text-lg font-bold">Tadabbur</p><p className="text-xs text-[#9db3aa]">Friday khutbah translation</p></div>
@@ -300,36 +320,45 @@ export default function ControlPage() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#d4a94f]">Operator controls</p>
             <h1 className="mt-2 text-2xl font-semibold leading-tight">Bridge the Arabic khutbah</h1>
-            <p className="mt-3 text-sm leading-relaxed text-[#9db3aa]">Prepare during the English khutbah, share the links, then start translation when the Arabic khutbah begins. Preparation briefly checks microphone access without broadcasting audio.</p>
+            <p className="mt-2 text-sm leading-relaxed text-[#b4c5bc]">Set up during the English khutbah. Start the microphone only when the Arabic khutbah begins.</p>
           </div>
-          <div className="rounded-xl border border-[#2a4139] bg-[#12201b] p-4">
-            <p className="text-xs font-semibold uppercase tracking-[.1em] text-[#9db3aa]">This session</p>
-            <div className="mt-3 flex items-center justify-between gap-3 text-sm"><span>Spoken language</span><strong>Arabic</strong></div>
-            <div className="mt-3 flex items-center justify-between gap-3 text-sm"><span>Displayed translation</span><strong>English</strong></div>
-            <p className="mt-4 border-t border-[#2a4139] pt-3 text-xs leading-relaxed text-[#9db3aa]">Quran recitation is identified and shown without machine translation.</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => void (isLive ? stop() : sessionId ? start() : prepare())}
-            disabled={isBusy}
-            className={`min-h-12 rounded-xl px-4 py-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-wait disabled:opacity-70 ${isLive ? "bg-[#5a302b] text-[#fff1ed] hover:bg-[#734039]" : "bg-[#d4a94f] text-[#12201b] hover:bg-[#e6c374]"}`}
-          >
-            {isLive ? "End Arabic translation" : runState === "preparing" ? "Preparing session…" : runState === "starting" ? "Starting transcription…" : runState === "stopping" ? "Ending session…" : sessionId ? "Start Arabic translation" : "Prepare session"}
-          </button>
-          <div className="rounded-xl border border-[#d4a94f]/40 bg-[#d4a94f]/5 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-[#f5f2ea]">Quran mode</p>
-                <p className="mt-1 text-xs leading-relaxed text-[#9db3aa]">Use during recitation if automatic detection misses a verse.</p>
+          <ol aria-label="Friday setup steps" className="grid grid-cols-3 gap-2">
+            {[
+              ["Prepare", "Check the microphone; audio stays off."],
+              ["Share", isLoopback ? "Open Tadabbur at a network address for phone links." : "Open the projector and share the attendee link."],
+              ["Translate", "Start when Arabic speech begins."],
+            ].map(([title, description], index) => (
+              <li key={title} aria-label={`${title}: ${description}`} aria-current={activeStep === index + 1 ? "step" : undefined} className={`flex min-w-0 flex-col items-center gap-1.5 rounded-xl border p-2 text-center ${activeStep === index + 1 ? "border-[#d4a94f]/55 bg-[#d4a94f]/10" : "border-[#2a4139] bg-[#12201b]"}`}>
+                <span aria-hidden="true" className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold ${activeStep === index + 1 ? "bg-[#d4a94f] text-[#12201b]" : "bg-[#2a4139] text-[#c9d6cf]"}`}>{index + 1}</span>
+                <strong className="text-xs text-[#f5f2ea]">{title}</strong>
+              </li>
+            ))}
+          </ol>
+          <p className="-mt-3 text-xs leading-relaxed text-[#b4c5bc]">{stepHint}</p>
+          <div className="flex flex-col gap-3 lg:sticky lg:bottom-0 lg:z-10 lg:-mx-6 lg:border-y lg:border-[#2a4139] lg:bg-[#0e1a16] lg:px-6 lg:py-4">
+            <button
+              type="button"
+              onClick={() => void (isLive ? stop() : sessionId ? start() : prepare())}
+              disabled={isBusy}
+              className={`min-h-12 rounded-xl px-4 py-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-wait disabled:opacity-70 ${isLive ? "bg-[#5a302b] text-[#fff1ed] hover:bg-[#734039]" : "bg-[#d4a94f] text-[#12201b] hover:bg-[#e6c374]"}`}
+            >
+              {isLive ? "End Arabic translation" : runState === "preparing" ? "Preparing session…" : runState === "starting" ? "Starting transcription…" : runState === "stopping" ? "Ending session…" : sessionId ? "Start Arabic translation" : "Prepare session"}
+            </button>
+            <div className="rounded-xl border border-[#d4a94f]/40 bg-[#d4a94f]/5 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-[#f5f2ea]">Quran mode</p>
+                  <p className="mt-1 text-xs leading-relaxed text-[#c9d6cf]">Switch on before expected Quran recitation. Automatic detection can miss verses.</p>
+                </div>
+                <button type="button" role="switch" aria-checked={recitationMode || recitationArmed} aria-label="Quran mode" onClick={toggleRecitation} disabled={isBusy || recitationPending !== null} className={`relative h-8 w-14 shrink-0 rounded-full border transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-not-allowed disabled:opacity-50 ${recitationMode || recitationArmed ? "border-[#d4a94f] bg-[#d4a94f]" : "border-[#4b6258] bg-[#2a4139]"}`}>
+                  <span className={`absolute top-1 h-5 w-5 rounded-full bg-[#0b1512] transition-all ${recitationMode || recitationArmed ? "left-7" : "left-1"}`} />
+                </button>
               </div>
-              <button type="button" role="switch" aria-checked={recitationMode || recitationArmed} aria-label="Quran mode" onClick={toggleRecitation} disabled={isBusy || recitationPending !== null} className={`relative h-8 w-14 shrink-0 rounded-full border transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-not-allowed disabled:opacity-50 ${recitationMode || recitationArmed ? "border-[#d4a94f] bg-[#d4a94f]" : "border-[#4b6258] bg-[#2a4139]"}`}>
-                <span className={`absolute top-1 h-5 w-5 rounded-full bg-[#0b1512] transition-all ${recitationMode || recitationArmed ? "left-7" : "left-1"}`} />
-              </button>
+              <p role="status" className="mt-3 text-xs font-medium text-[#e6c374]">{recitationPending !== null ? "Waiting for server confirmation…" : recitationMode ? "Active · public screens show “Quran being read”" : recitationArmed ? "Armed · Quran mode starts before the microphone" : isLive ? "Off · switch on before the next recitation" : "Off · arm now if recitation begins the Arabic khutbah"}</p>
             </div>
-              <p role="status" className="mt-3 text-xs font-medium text-[#e6c374]">{recitationPending !== null ? "Waiting for server confirmation…" : recitationMode ? "Active · public screens show “Quran being read”" : recitationArmed ? "Armed · Quran mode will start before the microphone" : isLive ? "Off · automatic detection remains active" : "Switch on before starting if recitation opens the Arabic khutbah"}</p>
           </div>
           {error && <p role="alert" className="rounded-xl border border-[#a85d4f] bg-[#2a1715] p-3 text-sm leading-relaxed text-[#ffd9d1]">{error}</p>}
-          <div className="mt-auto">
+          <div>
             <p className="mb-3 text-xs font-semibold uppercase tracking-[.1em] text-[#9db3aa]">Share live captions</p>
             {attendeeUrl ? (
               <div className="rounded-xl border border-[#2a4139] bg-[#12201b] p-4">
@@ -341,9 +370,9 @@ export default function ControlPage() {
                   <a href={displayUrl} target="_blank" rel="noreferrer" className="rounded-lg border border-[#3a5648] px-3 py-2 text-xs font-semibold text-[#e6ded0] hover:bg-[#1c332a]">Open projector ↗</a>
                 </div>
               </div>
-            ) : <p className="rounded-xl border border-[#2a4139] bg-[#12201b] p-4 text-sm leading-relaxed text-[#9db3aa]">Prepare a session to get the attendee link and projector display before the Arabic khutbah.</p>}
-            <a href="https://tanzil.net" target="_blank" rel="noreferrer" className="mt-4 inline-block text-xs text-[#9db3aa] underline underline-offset-2">Quran text reference: Tanzil Project</a>
+            ) : <p className="rounded-xl border border-[#2a4139] bg-[#12201b] p-3 text-xs leading-relaxed text-[#b4c5bc]">The projector and attendee links appear here after preparation.</p>}
           </div>
+          <a href="https://tanzil.net" target="_blank" rel="noreferrer" className="text-xs text-[#9db3aa] underline underline-offset-2">Quran text reference: Tanzil Project</a>
         </aside>
 
         <section className="flex min-w-0 flex-col">
@@ -375,16 +404,16 @@ export default function ControlPage() {
             </div>
             <div className="flex min-h-[280px] flex-col p-5 sm:p-8">
               <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#9db3aa]">English · public preview</p>
-              {recitationMode || partialQuran || (!partial && latest?.isQuranicCandidate) ? (
+              {publicQuranActive ? (
                 <div className="mt-9 rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 p-7 text-center text-2xl font-semibold text-[#f5f2ea]">Quran being read</div>
-              ) : !partial && latest?.isQuranicHadithCandidate ? (
+              ) : publicPreview.caption?.isQuranicHadithCandidate ? (
                 <div className="mt-9 rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 p-7 text-center text-xl font-semibold text-[#f5f2ea]">Scriptural passage being read</div>
               ) : (
                 <div className="mt-9 rounded-2xl border border-[#2a4139] bg-[#12201b] p-6 text-[clamp(1.2rem,2vw,2rem)] font-medium leading-[1.5] text-[#f5f2ea]">
-                  {partial ? <span className="text-[#9db3aa]">Listening for the next phrase…</span> : latest?.translations.en || <span className="text-[#9db3aa]">English captions appear here after each complete Arabic phrase.</span>}
+                  {publicPreview.caption?.translations.en || <span className="text-[#9db3aa]">{partial ? "Listening for the next phrase…" : "English captions appear here after each complete Arabic phrase."}</span>}
                 </div>
               )}
-              {!recitationMode && !partial && previous && !previous.isQuranicHadithCandidate && <p className="mt-7 border-t border-[#2a4139] pt-6 text-lg leading-relaxed text-[#9db3aa]">{previous.translations.en}</p>}
+              {!publicQuranActive && publicPreview.caption && !publicPreview.caption.isQuranicHadithCandidate && previous && !previous.isQuranicHadithCandidate && <p className="mt-7 border-t border-[#2a4139] pt-6 text-lg leading-relaxed text-[#9db3aa]">{previous.translations.en}</p>}
               <p className="mt-auto pt-8 text-xs leading-relaxed text-[#9db3aa]">Public screens show completed, checked phrases only. Partial Arabic is shown here for the operator.</p>
             </div>
           </div>
