@@ -238,11 +238,10 @@ async def _pump(runtime: SessionRuntime) -> None:
                     clause_id = uuid.uuid4().hex
                 continue
             if t.is_final:
-                clause = assembler.add_final(t.text)
-                if clause is not None:
+                for clause in assembler.add_final(t.text):
                     emit(_prepare_final(runtime, clause_id, clause))
                     clause_id = uuid.uuid4().hex
-                else:
+                if assembler.current:
                     emit(_prepare_partial(runtime, clause_id, assembler.current))
             else:
                 tail = t.text.strip()
