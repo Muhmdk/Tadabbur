@@ -73,6 +73,9 @@ export default function MobileViewerPage() {
         setViewerState("error");
       } else if (message.state === "live") {
         setViewerState("live");
+      } else if (message.state === "connecting") {
+        // The operator's connection dropped; the server keeps the session for them.
+        setViewerState("reconnecting");
       }
     }
 

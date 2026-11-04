@@ -74,6 +74,8 @@ ClientMessage = ClientAttach | ClientStop | ClientRecitationMode
 
 # ---------- WS: server -> client ----------
 
+# "connecting": a live session has no speaker attached right now (operator
+# reconnecting or worker restart). Only "ended" is final. Mirrors index.ts.
 SessionState = Literal["connecting", "ready", "live", "ended", "error"]
 
 

@@ -84,6 +84,12 @@ export type ClientMessage = ClientAttach | ClientStop | ClientRecitationMode;
 
 // ---------- WebSocket: server → client ----------
 
+/**
+ * `connecting` is broadcast while a live session has no speaker attached (the
+ * operator's connection dropped or a worker restarted). The session is still
+ * live; viewers should show a reconnecting notice and keep listening. Only
+ * `ended` (an explicit operator stop) is final.
+ */
 export type SessionState =
   | "connecting"
   | "ready"

@@ -20,6 +20,7 @@ from app.ws.attach import parse_client_message, read_attach, reject
 async def handler(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     opened = False
+    stopped = False  # only an explicit session.stop ends the session
     lease_token: str | None = None
     try:
         attach = await read_attach(websocket, session_id, "speaker")
@@ -60,7 +61,7 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
             except TimeoutError:
                 msg = None
             if runtime.failed:
-                await reject(websocket, session_id, "live captions stopped unexpectedly")
+                await reject(websocket, session_id, "live captions stopped; reconnecting")
                 break
             if time.monotonic() - last_renewed >= 10:
                 if not await speakers.renew(session_id, lease_token):
@@ -80,6 +81,7 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
             elif (text := msg.get("text")) is not None:
                 command = parse_client_message(text)
                 if isinstance(command, ClientStop) and command.sessionId == session_id:
+                    stopped = True
                     break
                 if isinstance(command, ClientRecitationMode) and command.sessionId == session_id:
                     await session_pipeline.set_recitation_mode(runtime, command.active)
@@ -97,6 +99,6 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
         pass
     finally:
         if opened:
-            await session_pipeline.close_session(session_id)
+            await session_pipeline.close_session(session_id, end=stopped)
         elif lease_token is not None:
             await speakers.release(session_id, lease_token)

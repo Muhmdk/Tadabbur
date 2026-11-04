@@ -56,6 +56,12 @@ async def publish(session_id: str, message: ServerMessage) -> None:
         await pipe.execute()
 
 
+async def latest_recitation_active(session_id: str) -> bool:
+    """Whether the last broadcast Quran-mode state for this session is on."""
+    raw = await get_redis().get(_replay_key(session_id, "recitation"))
+    return raw is not None and ServerRecitationState.model_validate_json(raw).active
+
+
 async def subscribe(session_id: str) -> AsyncIterator[ServerMessage]:
     """Subscribe to a session's channel. Yields parsed ServerMessage frames.
 

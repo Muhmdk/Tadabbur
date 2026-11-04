@@ -168,9 +168,7 @@ async def test_mode_discards_delayed_ayah_and_resumes_after_utterance(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_close_failure_still_persists_terminal_status_and_releases_lease(
-    monkeypatch,
-) -> None:
+async def test_close_failure_on_stop_still_ends_session_and_releases_lease(monkeypatch) -> None:
     published = []
     saved = []
     released = []
@@ -194,10 +192,41 @@ async def test_close_failure_still_persists_terminal_status_and_releases_lease(
     runtime = _runtime(asr=BrokenCloseASR())
     runtime.lease_token = "owner"
     pipeline._runtimes["s1"] = runtime
-    await pipeline.close_session("s1")
+    await pipeline.close_session("s1", end=True)
     assert saved[0].status == "ended"
     assert released == [("s1", "owner")]
     assert any(
-        isinstance(message, ServerSessionState) and message.state == "error"
+        isinstance(message, ServerSessionState) and message.state == "ended"
         for message in published
     )
+
+
+@pytest.mark.asyncio
+async def test_unexpected_close_keeps_session_live_for_reconnect(monkeypatch) -> None:
+    published = []
+    saved = []
+    released = []
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    async def save(session):
+        saved.append(session)
+
+    async def release(session_id, token):
+        released.append((session_id, token))
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    monkeypatch.setattr(pipeline.session_store, "save", save)
+    monkeypatch.setattr(pipeline.speakers, "release", release)
+    runtime = _runtime()
+    runtime.lease_token = "owner"
+    runtime.recitation_active = True
+    pipeline._runtimes["s1"] = runtime
+    await pipeline.close_session("s1", end=False)
+    assert saved == []  # status stays "live"
+    assert released == [("s1", "owner")]
+    states = [m for m in published if isinstance(m, ServerSessionState)]
+    assert [m.state for m in states] == ["connecting"]
+    # Quran mode is not lifted while the speaker is away.
+    assert not any(isinstance(m, ServerRecitationState) for m in published)

@@ -75,6 +75,9 @@ export default function DisplayPage() {
         setState("error");
       } else if (message.state === "live") {
         setState("live");
+      } else if (message.state === "connecting") {
+        // The operator's connection dropped; the server keeps the session for them.
+        setState("reconnecting");
       }
     };
 

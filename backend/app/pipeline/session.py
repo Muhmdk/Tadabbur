@@ -74,17 +74,28 @@ def _build_router() -> TranslationRouter:
 
 
 async def open_session(session: Session, *, lease_token: str | None = None) -> SessionRuntime:
-    """Open the ASR stream and start publishing captions for this session."""
+    """Open the ASR stream and start publishing captions for this session.
+
+    A session may be reopened after the speaker reconnects; Quran mode carries
+    over from the last broadcast state so a reconnect never silently lifts it.
+    """
     router = _build_router()
     asr: ASRProvider = SpeechmaticsASR(settings.speechmatics_api_key)
     await asr.open(session.sourceLanguage)
     live = session.model_copy(update={"status": "live"})
     try:
         await session_store.save(live)
+        recitation_active = await redis_pubsub.latest_recitation_active(session.id)
     except Exception:
         await asr.close()
         raise
-    runtime = SessionRuntime(session=live, asr=asr, router=router, lease_token=lease_token)
+    runtime = SessionRuntime(
+        session=live,
+        asr=asr,
+        router=router,
+        lease_token=lease_token,
+        recitation_active=recitation_active,
+    )
     _runtimes[session.id] = runtime
     runtime.pump = asyncio.create_task(_pump(runtime))
     try:
@@ -101,57 +112,60 @@ async def open_session(session: Session, *, lease_token: str | None = None) -> S
     return runtime
 
 
-async def close_session(session_id: str) -> None:
-    """Drain the ASR stream (flushing the final clause) and mark the session ended."""
+async def close_session(session_id: str, *, end: bool) -> None:
+    """Drain the ASR stream (flushing the final clause) and release the speaker.
+
+    Only an explicit operator stop ends a session (`end=True`). A dropped
+    connection, a provider failure, or a worker shutdown keeps the session live
+    so the operator can reconnect to the same projector and attendee links;
+    viewers are told the captions are reconnecting.
+    """
     runtime = _runtimes.pop(session_id, None)
     if runtime is None:
         return
     try:
-        close_failed = False
         try:
             await runtime.asr.close()  # ends the transcript stream → pump flushes + exits
         except Exception as exc:
-            close_failed = True
             runtime.failed = True
             logger.error("ASR close failed (%s)", type(exc).__name__)
         if runtime.pump is not None:
             try:
                 await runtime.pump
             except Exception as exc:
-                close_failed = True
                 runtime.failed = True
                 logger.error("Session caption pump failed (%s)", type(exc).__name__)
-        await session_store.save(runtime.session.model_copy(update={"status": "ended"}))
-        if runtime.recitation_active:
-            await redis_pubsub.publish(
-                session_id,
-                ServerRecitationState(type="recitation.state", sessionId=session_id, active=False),
-            )
-        if close_failed:
-            await redis_pubsub.publish(
-                session_id,
-                ServerSessionState(
-                    type="session.state",
-                    sessionId=session_id,
-                    state="error",
-                    error="Live captions stopped unexpectedly.",
-                ),
-            )
-        elif not runtime.failed:
-            await redis_pubsub.publish(
-                session_id,
-                ServerSessionState(type="session.state", sessionId=session_id, state="ended"),
-            )
+        if end:
+            await session_store.save(runtime.session.model_copy(update={"status": "ended"}))
+            if runtime.recitation_active:
+                await redis_pubsub.publish(
+                    session_id,
+                    ServerRecitationState(
+                        type="recitation.state", sessionId=session_id, active=False
+                    ),
+                )
+        await redis_pubsub.publish(
+            session_id,
+            ServerSessionState(
+                type="session.state",
+                sessionId=session_id,
+                state="ended" if end else "connecting",
+            ),
+        )
     finally:
         if runtime.lease_token is not None:
             await speakers.release(session_id, runtime.lease_token)
 
 
 async def close_all_sessions() -> None:
-    """Drain active streams while Redis is still available during shutdown."""
+    """Drain active streams while Redis is still available during shutdown.
+
+    A deploy or scale-in must not end a khutbah: sessions stay live and the
+    operator reconnects to another worker.
+    """
     for session_id in list(_runtimes):
         try:
-            await close_session(session_id)
+            await close_session(session_id, end=False)
         except Exception as exc:
             logger.error("Session shutdown failed (%s)", type(exc).__name__)
 
@@ -176,7 +190,6 @@ async def set_recitation_mode(runtime: SessionRuntime, active: bool) -> None:
 
 async def _pump(runtime: SessionRuntime) -> None:
     """Consume ASR transcripts, assemble clauses, publish captions to Redis."""
-    session = runtime.session
     assembler = ClauseAssembler()
     clause_id = uuid.uuid4().hex
     try:
@@ -215,17 +228,11 @@ async def _pump(runtime: SessionRuntime) -> None:
             clause = assembler.flush()
             if clause is not None:
                 await _publish_final(runtime, clause_id, clause)
-    except Exception:  # surface ASR/transport failures to viewers
+    except Exception as exc:
+        # The speaker handler sees `failed`, tells the operator, and closes the
+        # runtime without ending the session; viewers then see "connecting".
         runtime.failed = True
-        await redis_pubsub.publish(
-            session.id,
-            ServerSessionState(
-                type="session.state",
-                sessionId=session.id,
-                state="error",
-                error="Live captions stopped because transcription or translation failed.",
-            ),
-        )
+        logger.error("Session caption pump failed (%s)", type(exc).__name__)
 
 
 async def _publish_partial(runtime: SessionRuntime, clause_id: str, text: str) -> None:

@@ -6,10 +6,19 @@ import type { ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
 import { PcmMicrophone } from "@/lib/microphone";
 import { browserEndpoints } from "@/lib/endpoints";
+import {
+  clearOperatorSession,
+  loadOperatorSession,
+  reconnectDelayMs,
+  saveOperatorSession,
+} from "@/lib/operator-session";
 import { selectPublicCaption } from "@/lib/public-caption";
 import { CaptionStream } from "@/lib/ws-client";
 
-type RunState = "idle" | "preparing" | "starting" | "live" | "stopping" | "error";
+type RunState = "idle" | "preparing" | "starting" | "live" | "reconnecting" | "stopping" | "error";
+type SocketSource = "speaker" | "viewer";
+
+const LIVE_TIMEOUT_MS = 15000;
 
 function formatElapsed(seconds: number): string {
   const minutes = Math.floor(seconds / 60).toString().padStart(2, "0");
@@ -28,9 +37,23 @@ async function responseError(response: Response): Promise<string> {
   return `Could not start the session (HTTP ${response.status}).`;
 }
 
+/** "gone" means the session ended or expired; anything else may still resume. */
+async function sessionStatus(apiBase: string, id: string): Promise<Session["status"] | "gone" | "unknown"> {
+  try {
+    const response = await fetch(`${apiBase}/api/sessions/${id}`);
+    if (response.status === 404) return "gone";
+    if (!response.ok) return "unknown";
+    const session = (await response.json()) as Session;
+    return session.status === "ended" ? "gone" : session.status;
+  } catch {
+    return "unknown";
+  }
+}
+
 export default function ControlPage() {
   const [runState, setRunState] = useState<RunState>("idle");
   const [sessionId, setSessionId] = useState("");
+  const [resumable, setResumable] = useState(false);
   const [partial, setPartial] = useState("");
   const [partialQuran, setPartialQuran] = useState(false);
   const [finals, setFinals] = useState<ServerCaptionFinal[]>([]);
@@ -46,7 +69,12 @@ export default function ControlPage() {
   const speakerRef = useRef<CaptionStream | null>(null);
   const viewerRef = useRef<CaptionStream | null>(null);
   const microphoneRef = useRef<PcmMicrophone | null>(null);
+  const sessionIdRef = useRef("");
   const activeRef = useRef(false);
+  const stoppingRef = useRef(false);
+  const startedAtRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
   const endedResolverRef = useRef<(() => void) | null>(null);
   const liveResolverRef = useRef<{ resolve: () => void; reject: (error: Error) => void } | null>(null);
   const recitationResolverRef = useRef<{ desired: boolean; resolve: () => void } | null>(null);
@@ -54,26 +82,54 @@ export default function ControlPage() {
 
   useEffect(() => { setSiteOrigin(browserEndpoints().join); }, []);
 
-  const cleanUp = useCallback(async (sendStop: boolean) => {
-    activeRef.current = false;
-    if (recitationTimerRef.current) clearTimeout(recitationTimerRef.current);
-    recitationTimerRef.current = null;
-    await microphoneRef.current?.stop();
-    microphoneRef.current = null;
+  // Resume a session that a refresh, crash, or closed tab interrupted.
+  useEffect(() => {
+    const stored = loadOperatorSession(window.localStorage);
+    if (!stored) return;
+    let cancelled = false;
+    void sessionStatus(browserEndpoints().api, stored.id).then((status) => {
+      if (cancelled) return;
+      if (status === "gone") { clearOperatorSession(window.localStorage); return; }
+      sessionIdRef.current = stored.id;
+      setSessionId(stored.id);
+      setResumable(status === "live");
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const closeSockets = useCallback((sendStop: boolean) => {
     speakerRef.current?.close(sendStop);
     viewerRef.current?.close();
     speakerRef.current = null;
     viewerRef.current = null;
   }, []);
 
+  const cleanUp = useCallback(async (sendStop: boolean) => {
+    activeRef.current = false;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    if (recitationTimerRef.current) clearTimeout(recitationTimerRef.current);
+    recitationTimerRef.current = null;
+    await microphoneRef.current?.stop();
+    microphoneRef.current = null;
+    closeSockets(sendStop);
+  }, [closeSockets]);
+
   useEffect(() => () => { void cleanUp(false); }, [cleanUp]);
   useEffect(() => {
-    if (runState !== "live") return;
-    const started = Date.now();
-    const timer = window.setInterval(() => setElapsed((Date.now() - started) / 1000), 1000);
+    if (runState !== "live" && runState !== "reconnecting") return;
+    const timer = window.setInterval(() => setElapsed((Date.now() - startedAtRef.current) / 1000), 1000);
     return () => window.clearInterval(timer);
   }, [runState]);
 
+  function forgetSession() {
+    clearOperatorSession(window.localStorage);
+    sessionIdRef.current = "";
+    setSessionId("");
+    setResumable(false);
+  }
+
+  /** Stop for good: the session ended elsewhere or can no longer be resumed. */
   function failSession(message: string) {
     liveResolverRef.current?.reject(new Error(message));
     liveResolverRef.current = null;
@@ -84,12 +140,45 @@ export default function ControlPage() {
     }
   }
 
-  function handleMessage(message: ServerMessage) {
+  /** A dropped socket while live: keep the microphone and links, reconnect. */
+  function connectionLost() {
+    if (!activeRef.current || stoppingRef.current || reconnectTimerRef.current) return;
+    closeSockets(false);
+    setRunState("reconnecting");
+    setError("");
+    const delay = reconnectDelayMs(reconnectAttemptRef.current++);
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void reconnect();
+    }, delay);
+  }
+
+  async function reconnect() {
+    if (!activeRef.current || stoppingRef.current) return;
+    const id = sessionIdRef.current;
+    const status = await sessionStatus(browserEndpoints().api, id);
+    if (status === "gone") {
+      failSession("This session has ended. Prepare a new session to continue.");
+      forgetSession();
+      return;
+    }
+    try {
+      await openSockets(id);
+      if (!activeRef.current || stoppingRef.current) { closeSockets(false); return; }
+      reconnectAttemptRef.current = 0;
+      setRunState("live");
+    } catch {
+      closeSockets(false);
+      connectionLost();
+    }
+  }
+
+  function handleMessage(message: ServerMessage, source: SocketSource) {
     if (message.type === "caption.partial") {
       setPartial(message.text);
       setPartialQuran((current) => current || Boolean(message.isQuranicCandidate));
     } else if (message.type === "caption.final") {
-      setFinals((current) => [...current.slice(-29), message]);
+      setFinals((current) => current.some((caption) => caption.chunkId === message.chunkId) ? current : [...current.slice(-29), message]);
       setPartial("");
       setPartialQuran(false);
     } else if (message.type === "recitation.state") {
@@ -103,15 +192,67 @@ export default function ControlPage() {
       if (recitationTimerRef.current) clearTimeout(recitationTimerRef.current);
       recitationTimerRef.current = null;
       if (!message.active) { setFinals([]); setPartial(""); setPartialQuran(false); }
-    } else if (message.state === "live" || message.state === "ready") {
-      liveResolverRef.current?.resolve();
-      liveResolverRef.current = null;
+    } else if (message.state === "live") {
+      // Only the speaker socket confirms that this device owns the live stream.
+      if (source === "speaker") {
+        liveResolverRef.current?.resolve();
+        liveResolverRef.current = null;
+      }
     } else if (message.state === "error") {
-      failSession(message.error ?? "The transcription session could not continue.");
+      if (source !== "speaker") return;
+      if (liveResolverRef.current) {
+        liveResolverRef.current.reject(new Error(message.error ?? "The transcription session could not start."));
+        liveResolverRef.current = null;
+      } else {
+        connectionLost();
+      }
     } else if (message.state === "ended") {
       endedResolverRef.current?.();
       endedResolverRef.current = null;
-      if (activeRef.current) failSession("The live session ended unexpectedly.");
+      if (activeRef.current && !stoppingRef.current) {
+        failSession("The live session was ended.");
+        forgetSession();
+      }
+    }
+  }
+
+  /** Attach the preview viewer and the speaker; resolve once the speaker is live. */
+  async function openSockets(id: string): Promise<CaptionStream> {
+    const endpoints = browserEndpoints();
+    const viewer = new CaptionStream(endpoints.ws, id, "viewer");
+    const speaker = new CaptionStream(endpoints.ws, id, "speaker");
+    viewerRef.current = viewer;
+    speakerRef.current = speaker;
+
+    const liveSignal = new Promise<void>((resolve, reject) => {
+      liveResolverRef.current = { resolve, reject };
+    });
+    // A rejection that arrives while the sockets are opening is handled when awaited below.
+    void liveSignal.catch(() => undefined);
+    const connect = (stream: CaptionStream, source: SocketSource) => new Promise<void>((resolve, reject) => {
+      let opened = false;
+      const lost = () => { if (stream === speakerRef.current || stream === viewerRef.current) connectionLost(); };
+      stream.connect({
+        onMessage: (message) => handleMessage(message, source),
+        onOpen: () => { opened = true; resolve(); },
+        onError: () => { if (!opened) reject(new Error("A live connection could not be established.")); else lost(); },
+        onClose: () => { if (!opened) reject(new Error("The live connection closed during setup.")); else lost(); },
+      });
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await connect(viewer, "viewer");
+      await connect(speaker, "speaker");
+      await Promise.race([
+        liveSignal,
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Timed out waiting for transcription to start.")), LIVE_TIMEOUT_MS);
+        }),
+      ]);
+      return speaker;
+    } finally {
+      clearTimeout(timer);
+      liveResolverRef.current = null;
     }
   }
 
@@ -119,7 +260,6 @@ export default function ControlPage() {
     if (sessionId || runState === "preparing" || runState === "starting" || runState === "live") return;
     setRunState("preparing");
     setError("");
-    setSessionId("");
     setFinals([]);
     setPartial("");
     setPartialQuran(false);
@@ -140,69 +280,41 @@ export default function ControlPage() {
       });
       if (!response.ok) throw new Error(await responseError(response));
       const session = (await response.json()) as Session;
+      saveOperatorSession(window.localStorage, { id: session.id });
+      sessionIdRef.current = session.id;
       setSessionId(session.id);
+      setResumable(false);
       setRunState("idle");
     } catch (caught) {
-      setSessionId("");
+      forgetSession();
       setError(caught instanceof Error ? caught.message : "Unable to prepare a session.");
       setRunState("error");
     }
   }
 
   async function start() {
-    if (!sessionId || runState === "starting" || runState === "stopping" || runState === "live") return;
+    if (!sessionId || runState === "starting" || runState === "stopping" || runState === "live" || runState === "reconnecting") return;
     setRunState("starting");
     setError("");
     setFinals([]);
     setPartial("");
     setPartialQuran(false);
-    setRecitationMode(false);
     setRecitationPending(null);
     setElapsed(0);
     setMicLevel(0);
     setBytesSent(0);
+    stoppingRef.current = false;
+    reconnectAttemptRef.current = 0;
+    sessionIdRef.current = sessionId;
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access requires a secure browser connection.");
-      const endpoints = browserEndpoints();
-      const session = { id: sessionId };
-      const viewer = new CaptionStream(endpoints.ws, session.id, "viewer");
-      const speaker = new CaptionStream(endpoints.ws, session.id, "speaker");
-      viewerRef.current = viewer;
-      speakerRef.current = speaker;
-
-      let acknowledge = false;
-      const liveSignal = new Promise<void>((resolve, reject) => {
-        liveResolverRef.current = { resolve: () => { acknowledge = true; resolve(); }, reject };
-      });
-      // A rejection that arrives while the sockets are opening is handled when awaited below.
-      void liveSignal.catch(() => undefined);
-      const connect = (stream: CaptionStream) => new Promise<void>((resolve, reject) => {
-        let opened = false;
-        stream.connect({
-          onMessage: handleMessage,
-          onOpen: () => { opened = true; resolve(); },
-          onError: () => { if (!opened) reject(new Error("A live connection could not be established.")); else failSession("The live connection was interrupted."); },
-          onClose: () => { if (!opened) reject(new Error("The live connection closed during setup.")); else if (activeRef.current) failSession("The live connection was interrupted."); },
-        });
-      });
-      await connect(viewer);
-      await connect(speaker);
-      await Promise.race([
-        liveSignal,
-        new Promise<void>((_, reject) => window.setTimeout(() => reject(new Error("Timed out waiting for transcription to start.")), 15000)),
-      ]).catch(async (caught: unknown) => {
-        if (!(caught instanceof Error) || caught.message !== "Timed out waiting for transcription to start.") throw caught;
-        // The viewer can miss an early broadcast; the session record is authoritative.
-        const statusResponse = await fetch(`${endpoints.api}/api/sessions/${session.id}`);
-        if (!statusResponse.ok || (await statusResponse.json() as Session).status !== "live") throw caught;
-      });
-      if (!acknowledge) liveResolverRef.current = null;
+      const speaker = await openSockets(sessionId);
       if (recitationArmed) {
         setRecitationPending(true);
         const confirmed = new Promise<void>((resolve) => {
           recitationResolverRef.current = { desired: true, resolve };
         });
-        if (!speaker.send({ type: "session.recitation", sessionId: session.id, active: true })) {
+        if (!speaker.send({ type: "session.recitation", sessionId, active: true })) {
           throw new Error("Could not arm Quran mode before microphone capture.");
         }
         await Promise.race([
@@ -213,38 +325,49 @@ export default function ControlPage() {
       const microphone = new PcmMicrophone();
       microphoneRef.current = microphone;
       await microphone.start(
-        (chunk) => { if (!speaker.sendAudio(chunk)) failSession("Audio stopped reaching the transcription server."); },
+        // While reconnecting there is no speaker socket; audio is dropped, not queued.
+        (chunk) => { const live = speakerRef.current; if (live && !live.sendAudio(chunk)) connectionLost(); },
         (stats) => { setMicLevel(stats.level); setBytesSent(stats.bytesSent); },
       );
       activeRef.current = true;
+      startedAtRef.current = Date.now();
+      setResumable(false);
       setRunState("live");
     } catch (caught) {
       liveResolverRef.current = null;
       recitationResolverRef.current = null;
       setRecitationPending(null);
-      await cleanUp(true);
-      setSessionId("");
+      await cleanUp(false);
+      // Keep the prepared session (and its shared links) unless it is gone.
+      if ((await sessionStatus(browserEndpoints().api, sessionId)) === "gone") forgetSession();
       setError(caught instanceof Error ? caught.message : "Unable to start the Arabic translation.");
       setRunState("error");
     }
   }
 
   async function stop() {
-    if (runState !== "live") return;
+    if (runState !== "live" && runState !== "reconnecting") return;
+    stoppingRef.current = true;
     activeRef.current = false;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
     setRunState("stopping");
     try {
       await microphoneRef.current?.stop();
       microphoneRef.current = null;
       const ended = new Promise<void>((resolve) => { endedResolverRef.current = resolve; });
+      if (!speakerRef.current) {
+        // Reconnecting: attach once more so the server can end the session for viewers.
+        await openSockets(sessionIdRef.current).catch(() => undefined);
+      }
       speakerRef.current?.close(true);
       speakerRef.current = null;
       await Promise.race([ended, new Promise<void>((resolve) => window.setTimeout(resolve, 10000))]);
       viewerRef.current?.close();
       viewerRef.current = null;
       endedResolverRef.current = null;
+      forgetSession();
       setRunState("idle");
-      setSessionId("");
       setFinals([]);
       setPartial("");
       setPartialQuran(false);
@@ -257,11 +380,13 @@ export default function ControlPage() {
       await cleanUp(false);
       setError(caught instanceof Error ? caught.message : "Could not end the session cleanly.");
       setRunState("error");
+    } finally {
+      stoppingRef.current = false;
     }
   }
 
   function toggleRecitation() {
-    if (recitationPending !== null) return;
+    if (recitationPending !== null || runState === "reconnecting") return;
     if (!isLive) { setRecitationArmed((armed) => !armed); return; }
     const requested = !recitationMode;
     if (!speakerRef.current?.send({ type: "session.recitation", sessionId, active: requested })) {
@@ -288,6 +413,8 @@ export default function ControlPage() {
   }
 
   const isLive = runState === "live";
+  const isReconnecting = runState === "reconnecting";
+  const isOnAir = isLive || isReconnecting;
   const isBusy = runState === "preparing" || runState === "starting" || runState === "stopping";
   const latest = finals.at(-1);
   const previous = finals.at(-2);
@@ -300,14 +427,18 @@ export default function ControlPage() {
   const attendeeUrl = siteOrigin && sessionId ? `${siteOrigin}/join/${sessionId}` : "";
   const displayUrl = siteOrigin && sessionId ? `${siteOrigin}/display/${sessionId}` : "";
   const isLoopback = siteOrigin ? /https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(siteOrigin) : false;
-  const activeStep = isLive ? 3 : sessionId ? 2 : 1;
-  const stepHint = activeStep === 1
-    ? "Prepare checks the microphone without broadcasting audio."
-    : activeStep === 2
-      ? isLoopback
-        ? "Open Tadabbur at a network address before sharing the phone link."
-        : "Open the projector and share the attendee link before Arabic begins."
-      : "Arabic translation is live. End it when the khutbah finishes.";
+  const activeStep = isOnAir ? 3 : sessionId ? 2 : 1;
+  const stepHint = isReconnecting
+    ? "Connection lost. Reconnecting automatically; the projector and phone links stay the same."
+    : activeStep === 1
+      ? "Prepare checks the microphone without broadcasting audio."
+      : activeStep === 2
+        ? resumable
+          ? "This session was interrupted. Resume to continue on the same projector and phone links."
+          : isLoopback
+            ? "Open Tadabbur at a network address before sharing the phone link."
+            : "Open the projector and share the attendee link before Arabic begins."
+        : "Arabic translation is live. End it when the khutbah finishes.";
 
   return (
     <main className="min-h-[100dvh] bg-[#0b1512] text-[#f5f2ea]">
@@ -338,11 +469,11 @@ export default function ControlPage() {
           <div className="flex flex-col gap-3 lg:sticky lg:bottom-0 lg:z-10 lg:-mx-6 lg:border-y lg:border-[#2a4139] lg:bg-[#0e1a16] lg:px-6 lg:py-4">
             <button
               type="button"
-              onClick={() => void (isLive ? stop() : sessionId ? start() : prepare())}
+              onClick={() => void (isOnAir ? stop() : sessionId ? start() : prepare())}
               disabled={isBusy}
-              className={`min-h-12 rounded-xl px-4 py-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-wait disabled:opacity-70 ${isLive ? "bg-[#5a302b] text-[#fff1ed] hover:bg-[#734039]" : "bg-[#d4a94f] text-[#12201b] hover:bg-[#e6c374]"}`}
+              className={`min-h-12 rounded-xl px-4 py-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-wait disabled:opacity-70 ${isOnAir ? "bg-[#5a302b] text-[#fff1ed] hover:bg-[#734039]" : "bg-[#d4a94f] text-[#12201b] hover:bg-[#e6c374]"}`}
             >
-              {isLive ? "End Arabic translation" : runState === "preparing" ? "Preparing session…" : runState === "starting" ? "Starting transcription…" : runState === "stopping" ? "Ending session…" : sessionId ? "Start Arabic translation" : "Prepare session"}
+              {isOnAir ? "End Arabic translation" : runState === "preparing" ? "Preparing session…" : runState === "starting" ? "Starting transcription…" : runState === "stopping" ? "Ending session…" : sessionId ? resumable ? "Resume Arabic translation" : "Start Arabic translation" : "Prepare session"}
             </button>
             <div className="rounded-xl border border-[#d4a94f]/40 bg-[#d4a94f]/5 p-4">
               <div className="flex items-center justify-between gap-3">
@@ -350,7 +481,7 @@ export default function ControlPage() {
                   <p className="text-sm font-semibold text-[#f5f2ea]">Quran mode</p>
                   <p className="mt-1 text-xs leading-relaxed text-[#c9d6cf]">Switch on before expected Quran recitation. Automatic detection can miss verses.</p>
                 </div>
-                <button type="button" role="switch" aria-checked={recitationMode || recitationArmed} aria-label="Quran mode" onClick={toggleRecitation} disabled={isBusy || recitationPending !== null} className={`relative h-8 w-14 shrink-0 rounded-full border transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-not-allowed disabled:opacity-50 ${recitationMode || recitationArmed ? "border-[#d4a94f] bg-[#d4a94f]" : "border-[#4b6258] bg-[#2a4139]"}`}>
+                <button type="button" role="switch" aria-checked={recitationMode || recitationArmed} aria-label="Quran mode" onClick={toggleRecitation} disabled={isBusy || isReconnecting || recitationPending !== null} className={`relative h-8 w-14 shrink-0 rounded-full border transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-not-allowed disabled:opacity-50 ${recitationMode || recitationArmed ? "border-[#d4a94f] bg-[#d4a94f]" : "border-[#4b6258] bg-[#2a4139]"}`}>
                   <span className={`absolute top-1 h-5 w-5 rounded-full bg-[#0b1512] transition-all ${recitationMode || recitationArmed ? "left-7" : "left-1"}`} />
                 </button>
               </div>
@@ -382,8 +513,8 @@ export default function ControlPage() {
               <h2 className="mt-1 text-xl font-semibold">Arabic → English</h2>
             </div>
             <div className="flex items-center gap-3">
-              <span className={`h-2.5 w-2.5 rounded-full ${isLive ? "bg-[#e5533d] livepulse" : runState === "error" ? "bg-[#e5533d]" : "bg-[#7c9186]"}`} aria-hidden="true" />
-              <span role="status" className="text-sm font-semibold text-[#c9d6cf]">{isLive ? "Microphone live" : isBusy ? runState === "preparing" ? "Preparing" : runState === "starting" ? "Connecting" : "Ending" : runState === "error" ? "Needs attention" : sessionId ? "Prepared · mic off" : "Ready to prepare"}</span>
+              <span className={`h-2.5 w-2.5 rounded-full ${isLive ? "bg-[#e5533d] livepulse" : isReconnecting ? "bg-[#e6c374] livepulse" : runState === "error" ? "bg-[#e5533d]" : "bg-[#7c9186]"}`} aria-hidden="true" />
+              <span role="status" className="text-sm font-semibold text-[#c9d6cf]">{isLive ? "Microphone live" : isReconnecting ? "Reconnecting…" : isBusy ? runState === "preparing" ? "Preparing" : runState === "starting" ? "Connecting" : "Ending" : runState === "error" ? "Needs attention" : sessionId ? "Prepared · mic off" : "Ready to prepare"}</span>
               <span className="ml-2 font-mono text-sm tabular-nums text-[#9db3aa]">{formatElapsed(elapsed)}</span>
             </div>
           </header>
