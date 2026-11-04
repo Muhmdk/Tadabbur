@@ -124,3 +124,12 @@ class ServerCaptionFinal(BaseModel):
 ServerMessage = (
     ServerSessionState | ServerRecitationState | ServerCaptionPartial | ServerCaptionFinal
 )
+
+
+def to_wire(message: BaseModel) -> str:
+    """Serialize a message for the network.
+
+    Optional fields that are unset are omitted, matching the `field?: type`
+    declarations in index.ts, instead of being sent as `null`.
+    """
+    return message.model_dump_json(exclude_none=True)

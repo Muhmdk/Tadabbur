@@ -18,6 +18,7 @@ from app.models.contract import (
     ServerMessage,
     ServerRecitationState,
     ServerSessionState,
+    to_wire,
 )
 from app.redis_client import get_redis
 
@@ -40,7 +41,7 @@ def _replay_key(session_id: str, kind: str) -> str:
 async def publish(session_id: str, message: ServerMessage) -> None:
     """Publish and retain enough context for viewers arriving mid-sermon."""
     redis = get_redis()
-    payload = message.model_dump_json()
+    payload = to_wire(message)
     async with redis.pipeline(transaction=True) as pipe:
         if isinstance(message, ServerSessionState):
             pipe.set(_replay_key(session_id, "state"), payload, ex=_REPLAY_TTL_SECONDS)

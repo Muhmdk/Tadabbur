@@ -10,6 +10,7 @@ from app.models.contract import (
     ClientStop,
     ServerRecitationState,
     ServerSessionState,
+    to_wire,
 )
 from app.pipeline import session as session_pipeline
 from app.store import sessions as session_store
@@ -53,9 +54,7 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
         opened = True
         last_renewed = time.monotonic()
         await websocket.send_text(
-            ServerSessionState(
-                type="session.state", sessionId=session_id, state="live"
-            ).model_dump_json()
+            to_wire(ServerSessionState(type="session.state", sessionId=session_id, state="live"))
         )
 
         while True:
@@ -89,11 +88,13 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
                 if isinstance(command, ClientRecitationMode) and command.sessionId == session_id:
                     await session_pipeline.set_recitation_mode(runtime, command.active)
                     await websocket.send_text(
-                        ServerRecitationState(
-                            type="recitation.state",
-                            sessionId=session_id,
-                            active=command.active,
-                        ).model_dump_json()
+                        to_wire(
+                            ServerRecitationState(
+                                type="recitation.state",
+                                sessionId=session_id,
+                                active=command.active,
+                            )
+                        )
                     )
                 else:
                     await reject(websocket, session_id, "unsupported speaker command")
