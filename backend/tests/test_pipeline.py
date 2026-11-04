@@ -230,3 +230,38 @@ async def test_unexpected_close_keeps_session_live_for_reconnect(monkeypatch) ->
     assert [m.state for m in states] == ["connecting"]
     # Quran mode is not lifted while the speaker is away.
     assert not any(isinstance(m, ServerRecitationState) for m in published)
+
+
+@pytest.mark.asyncio
+async def test_translation_failure_publishes_untranslated_phrase_and_keeps_going(
+    monkeypatch,
+) -> None:
+    published = []
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    class FlakyRouter(FakeRouter):
+        async def translate_to_all(self, text, source_lang, targets):
+            self.calls.append(text)
+            if len(self.calls) == 1:
+                raise RuntimeError("provider outage")
+            return {"en": "English meaning"}
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    runtime = _runtime(
+        asr=FakeASR(
+            [
+                ASRTranscript("هذه كلمة من الخطبة", "ar", True, "1", 1),
+                ASRTranscript("", "ar", True, "1", 2, ends_utterance=True),
+                ASRTranscript("نتحدث اليوم عن الصدق", "ar", True, "2", 3),
+                ASRTranscript("", "ar", True, "2", 4, ends_utterance=True),
+            ]
+        ),
+        router=FlakyRouter(),
+    )
+    await pipeline._pump(runtime)
+    assert runtime.failed is False
+    finals = [message for message in published if isinstance(message, ServerCaptionFinal)]
+    assert [final.translations for final in finals] == [{}, {"en": "English meaning"}]
+    assert finals[0].source == "هذه كلمة من الخطبة"  # Arabic still shown, marked untranslated

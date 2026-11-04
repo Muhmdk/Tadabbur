@@ -1,8 +1,8 @@
-"""Fallback must deliver English or visibly fail the session."""
+"""Fallback must deliver English, or mark the phrase untranslated without failing."""
 
 import pytest
 
-from app.pipeline.translation.orchestrator import TranslationRouter, TranslationUnavailable
+from app.pipeline.translation.orchestrator import TranslationRouter
 
 
 class FailingProvider:
@@ -22,7 +22,6 @@ async def test_google_style_fallback_is_used_after_primary_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_provider_does_not_publish_empty_success() -> None:
+async def test_failed_target_is_left_out_instead_of_faked_or_raised() -> None:
     router = TranslationRouter([FailingProvider()])
-    with pytest.raises(TranslationUnavailable):
-        await router.translate_to_all("Arabic", "ar", ["en"])
+    assert await router.translate_to_all("Arabic", "ar", ["en"]) == {}

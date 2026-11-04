@@ -262,13 +262,15 @@ async def _publish_final(runtime: SessionRuntime, clause_id: str, clause: str) -
     epoch = runtime.recitation_epoch
     if runtime.recitation_active or runtime.resume_pending:
         return
-    translations = (
-        {}
-        if quranic
-        else await runtime.router.translate_to_all(
-            clause, session.sourceLanguage, session.targetLanguages
-        )
-    )
+    translations: dict[str, str] = {}
+    if not quranic:
+        try:
+            translations = await runtime.router.translate_to_all(
+                clause, session.sourceLanguage, session.targetLanguages
+            )
+        except Exception as exc:
+            # Publish the phrase as untranslated; never stop live captions.
+            logger.error("Translation failed unexpectedly (%s)", type(exc).__name__)
     async with runtime.publish_lock:
         if runtime.recitation_active or runtime.resume_pending or runtime.recitation_epoch != epoch:
             return

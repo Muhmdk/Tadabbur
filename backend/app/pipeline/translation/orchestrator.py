@@ -2,8 +2,12 @@
 
 For each target language the router tries providers in order and uses the first
 that succeeds (DeepL primary, Google fallback). Targets are translated
-concurrently to keep clause latency low. A failed target raises so the session
-never silently presents an untranslated sermon clause as a successful caption.
+concurrently to keep clause latency low.
+
+A target that no provider could translate is left out of the result, so the
+caption carries the Arabic with "translation unavailable" for that phrase. The
+session keeps running: one failed request must never stop live captions, and an
+untranslated clause is never presented as a translation.
 """
 
 import asyncio
@@ -15,10 +19,6 @@ logger = logging.getLogger(__name__)
 _PROVIDER_TIMEOUT_SECONDS = 4.0
 
 
-class TranslationUnavailable(RuntimeError):
-    """No configured provider could translate a requested target language."""
-
-
 class TranslationRouter:
     """Fan a clause out to every target language across ordered providers."""
 
@@ -28,12 +28,17 @@ class TranslationRouter:
     async def translate_to_all(
         self, text: str, source_lang: str, targets: list[str]
     ) -> dict[str, str]:
+        """Return translations for the targets that succeeded; omit the rest."""
         results = await asyncio.gather(
             *(self._translate(text, source_lang, target) for target in targets)
         )
-        return dict(zip(targets, results, strict=True))
+        return {
+            target: result
+            for target, result in zip(targets, results, strict=True)
+            if result is not None
+        }
 
-    async def _translate(self, text: str, source_lang: str, target: str) -> str:
+    async def _translate(self, text: str, source_lang: str, target: str) -> str | None:
         for provider in self._providers:
             try:
                 return await asyncio.wait_for(
@@ -48,4 +53,7 @@ class TranslationRouter:
                     type(provider).__name__,
                     type(exc).__name__,
                 )
-        raise TranslationUnavailable(f"No provider translated {source_lang} to {target}")
+        logger.error(
+            "no provider translated %s->%s; phrase shown untranslated", source_lang, target
+        )
+        return None

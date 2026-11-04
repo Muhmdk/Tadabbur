@@ -541,7 +541,7 @@ export default function ControlPage() {
                 <div className="mt-9 rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 p-7 text-center text-xl font-semibold text-[#f5f2ea]">Scriptural passage being read</div>
               ) : (
                 <div className="mt-9 rounded-2xl border border-[#2a4139] bg-[#12201b] p-6 text-[clamp(1.2rem,2vw,2rem)] font-medium leading-[1.5] text-[#f5f2ea]">
-                  {publicPreview.caption?.translations.en || <span className="text-[#9db3aa]">{partial ? "Listening for the next phrase…" : "English captions appear here after each complete Arabic phrase."}</span>}
+                  {publicPreview.caption ? publicPreview.caption.translations.en || <span className="text-[#9db3aa]">Translation unavailable for this phrase.</span> : <span className="text-[#9db3aa]">{partial ? "Listening for the next phrase…" : "English captions appear here after each complete Arabic phrase."}</span>}
                 </div>
               )}
               {!publicQuranActive && publicPreview.caption && !publicPreview.caption.isQuranicHadithCandidate && previous && !previous.isQuranicHadithCandidate && <p className="mt-7 border-t border-[#2a4139] pt-6 text-lg leading-relaxed text-[#9db3aa]">{previous.translations.en}</p>}
