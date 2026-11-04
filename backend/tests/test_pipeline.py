@@ -295,3 +295,45 @@ async def test_short_tail_of_a_long_ayah_is_not_machine_translated(monkeypatch) 
     finals = [m for m in published if isinstance(m, ServerCaptionFinal)]
     assert [f.isQuranicCandidate for f in finals] == [True, True, False]
     assert router.calls == ["هذه كلمة من الخطبة اليوم"]
+
+
+@pytest.mark.asyncio
+async def test_slow_translation_does_not_hold_up_the_next_clause(monkeypatch) -> None:
+    published = []
+    started: list[str] = []
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    class OrderedRouter(FakeRouter):
+        async def translate_to_all(self, text, source_lang, targets):
+            started.append(text)
+            if len(started) == 1:
+                await release_first.wait()  # the first phrase is slow
+            else:
+                second_started.set()
+            return {"en": f"English for {text}"}
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    runtime = _runtime(
+        asr=FakeASR(
+            [
+                ASRTranscript("هذه كلمة من الخطبة", "ar", True, "1", 1),
+                ASRTranscript("", "ar", True, "1", 2, ends_utterance=True),
+                ASRTranscript("نتحدث اليوم عن الصدق", "ar", True, "2", 3),
+                ASRTranscript("", "ar", True, "2", 4, ends_utterance=True),
+            ]
+        ),
+        router=OrderedRouter(),
+    )
+    pump = asyncio.create_task(pipeline._pump(runtime))
+    # The second phrase is translated while the first is still in flight...
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+    assert not any(isinstance(m, ServerCaptionFinal) for m in published)
+    release_first.set()
+    await pump
+    # ...and captions still come out in spoken order.
+    finals = [m.source for m in published if isinstance(m, ServerCaptionFinal)]
+    assert finals == ["هذه كلمة من الخطبة", "نتحدث اليوم عن الصدق"]
