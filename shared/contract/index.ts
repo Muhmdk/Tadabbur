@@ -6,7 +6,7 @@
  * shapes. See CLAUDE.md §4 — any change starts here.
  */
 
-export const CONTRACT_VERSION = "0.2.0";
+export const CONTRACT_VERSION = "0.3.0";
 
 // ---------- Domain primitives ----------
 
@@ -32,6 +32,16 @@ export interface CreateSessionRequest {
   sourceLanguage: Language;
   /** Current operator workflow supports English ("en"). */
   targetLanguages: Language[];
+}
+
+/**
+ * Response to `POST /api/sessions`. `operatorToken` is a secret that lets the
+ * control screen attach as the speaker. Keep it on the operator's device only:
+ * never put it in a URL, QR code, or log. The public session id alone grants
+ * read-only viewing.
+ */
+export interface CreateSessionResponse extends Session {
+  operatorToken: string;
 }
 
 export interface HealthResponse {
@@ -66,6 +76,8 @@ export interface ClientAttach {
   type: "session.attach";
   sessionId: SessionId;
   role: SpeakerRole;
+  /** Required when `role` is "speaker"; from `CreateSessionResponse`. */
+  operatorToken?: string;
 }
 
 export interface ClientStop {
@@ -84,6 +96,12 @@ export type ClientMessage = ClientAttach | ClientStop | ClientRecitationMode;
 
 // ---------- WebSocket: server → client ----------
 
+/**
+ * `connecting` is broadcast while a live session has no speaker attached (the
+ * operator's connection dropped or a worker restarted). The session is still
+ * live; viewers should show a reconnecting notice and keep listening. Only
+ * `ended` (an explicit operator stop) is final.
+ */
 export type SessionState =
   | "connecting"
   | "ready"

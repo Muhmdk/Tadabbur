@@ -168,9 +168,7 @@ async def test_mode_discards_delayed_ayah_and_resumes_after_utterance(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_close_failure_still_persists_terminal_status_and_releases_lease(
-    monkeypatch,
-) -> None:
+async def test_close_failure_on_stop_still_ends_session_and_releases_lease(monkeypatch) -> None:
     published = []
     saved = []
     released = []
@@ -194,10 +192,148 @@ async def test_close_failure_still_persists_terminal_status_and_releases_lease(
     runtime = _runtime(asr=BrokenCloseASR())
     runtime.lease_token = "owner"
     pipeline._runtimes["s1"] = runtime
-    await pipeline.close_session("s1")
+    await pipeline.close_session("s1", end=True)
     assert saved[0].status == "ended"
     assert released == [("s1", "owner")]
     assert any(
-        isinstance(message, ServerSessionState) and message.state == "error"
+        isinstance(message, ServerSessionState) and message.state == "ended"
         for message in published
     )
+
+
+@pytest.mark.asyncio
+async def test_unexpected_close_keeps_session_live_for_reconnect(monkeypatch) -> None:
+    published = []
+    saved = []
+    released = []
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    async def save(session):
+        saved.append(session)
+
+    async def release(session_id, token):
+        released.append((session_id, token))
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    monkeypatch.setattr(pipeline.session_store, "save", save)
+    monkeypatch.setattr(pipeline.speakers, "release", release)
+    runtime = _runtime()
+    runtime.lease_token = "owner"
+    runtime.recitation_active = True
+    pipeline._runtimes["s1"] = runtime
+    await pipeline.close_session("s1", end=False)
+    assert saved == []  # status stays "live"
+    assert released == [("s1", "owner")]
+    states = [m for m in published if isinstance(m, ServerSessionState)]
+    assert [m.state for m in states] == ["connecting"]
+    # Quran mode is not lifted while the speaker is away.
+    assert not any(isinstance(m, ServerRecitationState) for m in published)
+
+
+@pytest.mark.asyncio
+async def test_translation_failure_publishes_untranslated_phrase_and_keeps_going(
+    monkeypatch,
+) -> None:
+    published = []
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    class FlakyRouter(FakeRouter):
+        async def translate_to_all(self, text, source_lang, targets):
+            self.calls.append(text)
+            if len(self.calls) == 1:
+                raise RuntimeError("provider outage")
+            return {"en": "English meaning"}
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    runtime = _runtime(
+        asr=FakeASR(
+            [
+                ASRTranscript("هذه كلمة من الخطبة", "ar", True, "1", 1),
+                ASRTranscript("", "ar", True, "1", 2, ends_utterance=True),
+                ASRTranscript("نتحدث اليوم عن الصدق", "ar", True, "2", 3),
+                ASRTranscript("", "ar", True, "2", 4, ends_utterance=True),
+            ]
+        ),
+        router=FlakyRouter(),
+    )
+    await pipeline._pump(runtime)
+    assert runtime.failed is False
+    finals = [message for message in published if isinstance(message, ServerCaptionFinal)]
+    assert [final.translations for final in finals] == [{}, {"en": "English meaning"}]
+    assert finals[0].source == "هذه كلمة من الخطبة"  # Arabic still shown, marked untranslated
+
+
+@pytest.mark.asyncio
+async def test_short_tail_of_a_long_ayah_is_not_machine_translated(monkeypatch) -> None:
+    published = []
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    kursi_end = "من ذا الذي يشفع عنده إلا بإذنه يعلم ما بين أيديهم وما خلفهم"
+    router = FakeRouter()
+    runtime = _runtime(
+        asr=FakeASR(
+            [
+                ASRTranscript(kursi_end, "ar", True, "1", 1),
+                ASRTranscript("", "ar", True, "1", 2, ends_utterance=True),
+                # A breath, then the last words of the phrase on their own.
+                ASRTranscript("ولا يحيطون بشيء", "ar", True, "2", 3),
+                ASRTranscript("", "ar", True, "2", 4, ends_utterance=True),
+                ASRTranscript("هذه كلمة من الخطبة اليوم", "ar", True, "3", 5),
+                ASRTranscript("", "ar", True, "3", 6, ends_utterance=True),
+            ]
+        ),
+        router=router,
+    )
+    await pipeline._pump(runtime)
+    finals = [m for m in published if isinstance(m, ServerCaptionFinal)]
+    assert [f.isQuranicCandidate for f in finals] == [True, True, False]
+    assert router.calls == ["هذه كلمة من الخطبة اليوم"]
+
+
+@pytest.mark.asyncio
+async def test_slow_translation_does_not_hold_up_the_next_clause(monkeypatch) -> None:
+    published = []
+    started: list[str] = []
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    class OrderedRouter(FakeRouter):
+        async def translate_to_all(self, text, source_lang, targets):
+            started.append(text)
+            if len(started) == 1:
+                await release_first.wait()  # the first phrase is slow
+            else:
+                second_started.set()
+            return {"en": f"English for {text}"}
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    runtime = _runtime(
+        asr=FakeASR(
+            [
+                ASRTranscript("هذه كلمة من الخطبة", "ar", True, "1", 1),
+                ASRTranscript("", "ar", True, "1", 2, ends_utterance=True),
+                ASRTranscript("نتحدث اليوم عن الصدق", "ar", True, "2", 3),
+                ASRTranscript("", "ar", True, "2", 4, ends_utterance=True),
+            ]
+        ),
+        router=OrderedRouter(),
+    )
+    pump = asyncio.create_task(pipeline._pump(runtime))
+    # The second phrase is translated while the first is still in flight...
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+    assert not any(isinstance(m, ServerCaptionFinal) for m in published)
+    release_first.set()
+    await pump
+    # ...and captions still come out in spoken order.
+    finals = [m.source for m in published if isinstance(m, ServerCaptionFinal)]
+    assert finals == ["هذه كلمة من الخطبة", "نتحدث اليوم عن الصدق"]

@@ -2,7 +2,8 @@
 
 One channel per session: `tadabbur:session:{session_id}:captions`. Producers
 are the pipeline (one per session). Consumers are viewer WebSockets (many per
-session). This is the cheap side — see CLAUDE.md §2.
+session), which share one subscription per session on each worker. This is the
+cheap side — see CLAUDE.md §2.
 """
 
 from collections.abc import AsyncIterator
@@ -10,12 +11,14 @@ from typing import Annotated
 
 from pydantic import Field, TypeAdapter
 
+from app.broadcast import local_fanout
 from app.models.contract import (
     ServerCaptionFinal,
     ServerCaptionPartial,
     ServerMessage,
     ServerRecitationState,
     ServerSessionState,
+    to_wire,
 )
 from app.redis_client import get_redis
 
@@ -38,7 +41,7 @@ def _replay_key(session_id: str, kind: str) -> str:
 async def publish(session_id: str, message: ServerMessage) -> None:
     """Publish and retain enough context for viewers arriving mid-sermon."""
     redis = get_redis()
-    payload = message.model_dump_json()
+    payload = to_wire(message)
     async with redis.pipeline(transaction=True) as pipe:
         if isinstance(message, ServerSessionState):
             pipe.set(_replay_key(session_id, "state"), payload, ex=_REPLAY_TTL_SECONDS)
@@ -56,15 +59,22 @@ async def publish(session_id: str, message: ServerMessage) -> None:
         await pipe.execute()
 
 
-async def subscribe(session_id: str) -> AsyncIterator[ServerMessage]:
-    """Subscribe to a session's channel. Yields parsed ServerMessage frames.
+async def latest_recitation_active(session_id: str) -> bool:
+    """Whether the last broadcast Quran-mode state for this session is on."""
+    raw = await get_redis().get(_replay_key(session_id, "recitation"))
+    return raw is not None and ServerRecitationState.model_validate_json(raw).active
 
-    The pubsub connection and subscription are torn down when the caller stops
-    iterating (e.g. the viewer WebSocket disconnects).
+
+async def subscribe(session_id: str) -> AsyncIterator[ServerMessage]:
+    """Subscribe to a session's captions. Yields parsed ServerMessage frames.
+
+    Replays the latest state first for viewers arriving mid-sermon. Viewers on
+    this worker share one Redis subscription per session (see local_fanout);
+    leaving is handled when the caller stops iterating. Raises ConnectionError
+    if the shared subscription stops, so the viewer reconnects.
     """
-    pubsub = get_redis().pubsub(ignore_subscribe_messages=True)
     channel = _channel(session_id)
-    await pubsub.subscribe(channel)
+    queue = await local_fanout.join(channel)
     try:
         state, recitation, caption = await get_redis().mget(
             [
@@ -87,10 +97,8 @@ async def subscribe(session_id: str) -> AsyncIterator[ServerMessage]:
             yield recitation_state
         if caption is not None and not (recitation_state and recitation_state.active):
             yield _MESSAGE_ADAPTER.validate_json(caption)
-        async for message in pubsub.listen():
-            if message is None or message.get("type") != "message":
-                continue
-            yield _MESSAGE_ADAPTER.validate_json(message["data"])
+        while (payload := await queue.get()) is not local_fanout.CLOSED:
+            yield _MESSAGE_ADAPTER.validate_json(payload)
+        raise ConnectionError("caption feed stopped")
     finally:
-        await pubsub.unsubscribe(channel)
-        await pubsub.aclose()
+        local_fanout.leave(channel, queue)

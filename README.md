@@ -128,6 +128,11 @@ required.
 ## Notes
 
 - API keys and `.env` files must never be committed.
+- Only the device that prepared a session can speak for it: the control screen
+  keeps a private operator token in browser storage, and the projector and
+  attendee links are read-only. There are no accounts yet, so anyone who can
+  reach the backend can still create sessions of their own; keep it behind the
+  mosque's network or a proxy for now.
 - The Quran matcher uses the [Tanzil Project](https://tanzil.net/) Simple Clean
   Arabic text as a reference. Its source license and copyright notice are
   included with the corpus. A transcript can miss or alter a verse, especially

@@ -8,6 +8,7 @@ import type { Language, ServerCaptionFinal, ServerMessage, Session } from "@cont
 import CaptionRenderer from "@/components/CaptionRenderer";
 import { browserEndpoints } from "@/lib/endpoints";
 import { nextPartialCaptionState, selectPublicCaption } from "@/lib/public-caption";
+import { useScreenWakeLock } from "@/lib/wake-lock";
 import { CaptionStream } from "@/lib/ws-client";
 
 
@@ -75,6 +76,9 @@ export default function DisplayPage() {
         setState("error");
       } else if (message.state === "live") {
         setState("live");
+      } else if (message.state === "connecting") {
+        // The operator's connection dropped; the server keeps the session for them.
+        setState("reconnecting");
       }
     };
 
@@ -127,6 +131,8 @@ export default function DisplayPage() {
   const targetLanguage: Language = session?.targetLanguages[0] ?? "en";
   const followUrl = joinBaseUrl ? `${joinBaseUrl}/join/${sessionId}` : "";
   const isLive = state === "live";
+  // Keep the projector from blanking or starting a screen saver mid-khutbah.
+  useScreenWakeLock(state !== "ended" && state !== "error");
   const publicCaption = selectPublicCaption(latest, partialState, manualQuran);
 
   return (

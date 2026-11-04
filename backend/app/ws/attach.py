@@ -16,6 +16,7 @@ from app.models.contract import (
     ClientMessage,
     ServerSessionState,
     SpeakerRole,
+    to_wire,
 )
 
 # ClientMessage is a union; route by the `type` discriminator.
@@ -56,8 +57,10 @@ async def read_attach(
 
 async def reject(websocket: WebSocket, session_id: str, error: str) -> None:
     await websocket.send_text(
-        ServerSessionState(
-            type="session.state", sessionId=session_id, state="error", error=error
-        ).model_dump_json()
+        to_wire(
+            ServerSessionState(
+                type="session.state", sessionId=session_id, state="error", error=error
+            )
+        )
     )
     await websocket.close()

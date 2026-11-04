@@ -10,6 +10,7 @@ from app.models.contract import (
     ClientStop,
     ServerRecitationState,
     ServerSessionState,
+    to_wire,
 )
 from app.pipeline import session as session_pipeline
 from app.store import sessions as session_store
@@ -20,6 +21,7 @@ from app.ws.attach import parse_client_message, read_attach, reject
 async def handler(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     opened = False
+    stopped = False  # only an explicit session.stop ends the session
     lease_token: str | None = None
     try:
         attach = await read_attach(websocket, session_id, "speaker")
@@ -32,6 +34,9 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
             return
         if session.status == "ended":
             await reject(websocket, session_id, "this session has ended")
+            return
+        if not await session_store.is_operator(session_id, attach.operatorToken):
+            await reject(websocket, session_id, "only the operator's device can speak")
             return
         lease_token = await speakers.acquire(session_id)
         if lease_token is None:
@@ -49,9 +54,7 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
         opened = True
         last_renewed = time.monotonic()
         await websocket.send_text(
-            ServerSessionState(
-                type="session.state", sessionId=session_id, state="live"
-            ).model_dump_json()
+            to_wire(ServerSessionState(type="session.state", sessionId=session_id, state="live"))
         )
 
         while True:
@@ -60,7 +63,7 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
             except TimeoutError:
                 msg = None
             if runtime.failed:
-                await reject(websocket, session_id, "live captions stopped unexpectedly")
+                await reject(websocket, session_id, "live captions stopped; reconnecting")
                 break
             if time.monotonic() - last_renewed >= 10:
                 if not await speakers.renew(session_id, lease_token):
@@ -80,15 +83,18 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
             elif (text := msg.get("text")) is not None:
                 command = parse_client_message(text)
                 if isinstance(command, ClientStop) and command.sessionId == session_id:
+                    stopped = True
                     break
                 if isinstance(command, ClientRecitationMode) and command.sessionId == session_id:
                     await session_pipeline.set_recitation_mode(runtime, command.active)
                     await websocket.send_text(
-                        ServerRecitationState(
-                            type="recitation.state",
-                            sessionId=session_id,
-                            active=command.active,
-                        ).model_dump_json()
+                        to_wire(
+                            ServerRecitationState(
+                                type="recitation.state",
+                                sessionId=session_id,
+                                active=command.active,
+                            )
+                        )
                     )
                 else:
                     await reject(websocket, session_id, "unsupported speaker command")
@@ -97,6 +103,6 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
         pass
     finally:
         if opened:
-            await session_pipeline.close_session(session_id)
+            await session_pipeline.close_session(session_id, end=stopped)
         elif lease_token is not None:
             await speakers.release(session_id, lease_token)

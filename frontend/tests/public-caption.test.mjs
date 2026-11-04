@@ -21,9 +21,9 @@ function loadTypeScript(path, jsx = false) {
       jsx: jsx ? ts.JsxEmit.ReactJSX : undefined,
     },
   }).outputText;
-  const module = { exports: {} };
-  new Function("require", "module", "exports", compiled)(require, module, module.exports);
-  return module.exports;
+  const mod = { exports: {} };
+  new Function("require", "module", "exports", compiled)(require, mod, mod.exports);
+  return mod.exports;
 }
 
 const CaptionRenderer = loadTypeScript("components/CaptionRenderer.tsx", true).default;
@@ -81,6 +81,32 @@ for (const variant of ["projector", "attendee"]) {
     assert.match(resumed, /English translation marker/);
   });
 }
+
+test("an ordinary caption stays readable while the next phrase is being spoken", () => {
+  for (const variant of ["projector", "attendee"]) {
+    const duringNextPartial = selectPublicCaption(ordinary, "listening", false);
+    const html = renderToStaticMarkup(React.createElement(CaptionRenderer, {
+      caption: duringNextPartial.caption,
+      targetLanguage: "en",
+      variant,
+      isQuranActive: duringNextPartial.isQuranActive,
+    }));
+    assert.match(html, /English translation marker/);
+    assert.doesNotMatch(html, /Listening for the next phrase/);
+  }
+});
+
+test("a Quran partial after an ordinary caption replaces it with the notice", () => {
+  const duringRecitation = selectPublicCaption(ordinary, "quran", false);
+  assert.equal(duringRecitation.isQuranActive, true);
+  const html = renderToStaticMarkup(React.createElement(CaptionRenderer, {
+    caption: duringRecitation.caption,
+    targetLanguage: "en",
+    isQuranActive: duringRecitation.isQuranActive,
+  }));
+  assert.match(html, /Quran being read/);
+  assert.doesNotMatch(html, /English translation marker|Arabic source marker/);
+});
 
 test("LAN browser host resolves the backend on the same device", () => {
   assert.deepEqual(resolveEndpoints("http://192.168.1.50:3000/join/session"), {

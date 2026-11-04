@@ -7,6 +7,7 @@ import type { Language, ServerCaptionFinal, ServerMessage, Session } from "@cont
 import CaptionRenderer from "@/components/CaptionRenderer";
 import { browserEndpoints } from "@/lib/endpoints";
 import { nextPartialCaptionState, selectPublicCaption } from "@/lib/public-caption";
+import { useScreenWakeLock } from "@/lib/wake-lock";
 import { CaptionStream } from "@/lib/ws-client";
 
 
@@ -73,6 +74,9 @@ export default function MobileViewerPage() {
         setViewerState("error");
       } else if (message.state === "live") {
         setViewerState("live");
+      } else if (message.state === "connecting") {
+        // The operator's connection dropped; the server keeps the session for them.
+        setViewerState("reconnecting");
       }
     }
 
@@ -142,6 +146,8 @@ export default function MobileViewerPage() {
   const languages = session?.targetLanguages ?? [];
   const scale = SCALES[scaleIndex];
   const isLive = viewerState === "live";
+  // Phones auto-lock within a minute; keep captions readable while they're live.
+  useScreenWakeLock(isLive || viewerState === "reconnecting");
 
   return (
     <div className="min-h-[100dvh] bg-[#0b1512] text-[#f5f2ea]">

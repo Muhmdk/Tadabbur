@@ -10,7 +10,7 @@ import asyncio
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.broadcast import redis_pubsub
-from app.models.contract import ClientStop
+from app.models.contract import ClientStop, to_wire
 from app.store import sessions as session_store
 from app.ws.attach import parse_client_message, read_attach, reject
 
@@ -47,7 +47,7 @@ async def _stream(websocket: WebSocket, session_id: str) -> None:
 
 async def _forward(websocket: WebSocket, session_id: str) -> None:
     async for message in redis_pubsub.subscribe(session_id):
-        await websocket.send_text(message.model_dump_json())
+        await websocket.send_text(to_wire(message))
 
 
 async def _watch_client(websocket: WebSocket) -> None:
