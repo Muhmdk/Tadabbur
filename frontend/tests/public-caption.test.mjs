@@ -21,9 +21,9 @@ function loadTypeScript(path, jsx = false) {
       jsx: jsx ? ts.JsxEmit.ReactJSX : undefined,
     },
   }).outputText;
-  const module = { exports: {} };
-  new Function("require", "module", "exports", compiled)(require, module, module.exports);
-  return module.exports;
+  const mod = { exports: {} };
+  new Function("require", "module", "exports", compiled)(require, mod, mod.exports);
+  return mod.exports;
 }
 
 const CaptionRenderer = loadTypeScript("components/CaptionRenderer.tsx", true).default;

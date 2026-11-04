@@ -25,7 +25,7 @@ access from a non-localhost address. A production HTTPS site needs
 reachable secure backend, or a reverse proxy for same-origin `/api` and
 `/ws`. See `.env.example`.
 
-Run `npm test`, `npm run typecheck`, and `npm run build` before release.
+Run `npm test`, `npm run lint`, `npm run typecheck`, and `npm run build` before release.
 
 ## Layout
 
