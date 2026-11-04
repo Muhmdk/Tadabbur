@@ -26,8 +26,8 @@ function memoryStorage() {
 
 test("a prepared session survives a page reload", () => {
   const storage = memoryStorage();
-  saveOperatorSession(storage, { id: "abc" });
-  assert.deepEqual(loadOperatorSession(storage), { id: "abc" });
+  saveOperatorSession(storage, { id: "abc", operatorToken: "secret" });
+  assert.deepEqual(loadOperatorSession(storage), { id: "abc", operatorToken: "secret" });
   clearOperatorSession(storage);
   assert.equal(loadOperatorSession(storage), null);
 });
@@ -35,6 +35,8 @@ test("a prepared session survives a page reload", () => {
 test("a corrupt stored session is ignored", () => {
   const storage = memoryStorage();
   storage.setItem("tadabbur.operator-session", "{not json");
+  assert.equal(loadOperatorSession(storage), null);
+  storage.setItem("tadabbur.operator-session", JSON.stringify({ id: "abc" })); // no token
   assert.equal(loadOperatorSession(storage), null);
 });
 

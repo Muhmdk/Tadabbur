@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import type { ServerCaptionFinal, ServerMessage, Session } from "@contract";
+import type { CreateSessionResponse, ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
 import { PcmMicrophone } from "@/lib/microphone";
 import { browserEndpoints } from "@/lib/endpoints";
@@ -70,6 +70,7 @@ export default function ControlPage() {
   const viewerRef = useRef<CaptionStream | null>(null);
   const microphoneRef = useRef<PcmMicrophone | null>(null);
   const sessionIdRef = useRef("");
+  const operatorTokenRef = useRef("");
   const activeRef = useRef(false);
   const stoppingRef = useRef(false);
   const startedAtRef = useRef(0);
@@ -91,6 +92,7 @@ export default function ControlPage() {
       if (cancelled) return;
       if (status === "gone") { clearOperatorSession(window.localStorage); return; }
       sessionIdRef.current = stored.id;
+      operatorTokenRef.current = stored.operatorToken;
       setSessionId(stored.id);
       setResumable(status === "live");
     });
@@ -125,6 +127,7 @@ export default function ControlPage() {
   function forgetSession() {
     clearOperatorSession(window.localStorage);
     sessionIdRef.current = "";
+    operatorTokenRef.current = "";
     setSessionId("");
     setResumable(false);
   }
@@ -220,7 +223,7 @@ export default function ControlPage() {
   async function openSockets(id: string): Promise<CaptionStream> {
     const endpoints = browserEndpoints();
     const viewer = new CaptionStream(endpoints.ws, id, "viewer");
-    const speaker = new CaptionStream(endpoints.ws, id, "speaker");
+    const speaker = new CaptionStream(endpoints.ws, id, "speaker", operatorTokenRef.current);
     viewerRef.current = viewer;
     speakerRef.current = speaker;
 
@@ -279,9 +282,10 @@ export default function ControlPage() {
         body: JSON.stringify({ sourceLanguage: "ar", targetLanguages: ["en"] }),
       });
       if (!response.ok) throw new Error(await responseError(response));
-      const session = (await response.json()) as Session;
-      saveOperatorSession(window.localStorage, { id: session.id });
+      const session = (await response.json()) as CreateSessionResponse;
+      saveOperatorSession(window.localStorage, { id: session.id, operatorToken: session.operatorToken });
       sessionIdRef.current = session.id;
+      operatorTokenRef.current = session.operatorToken;
       setSessionId(session.id);
       setResumable(false);
       setRunState("idle");

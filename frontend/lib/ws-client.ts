@@ -21,10 +21,12 @@ export type CaptionStreamHandlers = {
 export class CaptionStream {
   private ws: WebSocket | null = null;
 
+  /** `operatorToken` is required for the speaker role and never sent by viewers. */
   constructor(
     private readonly baseUrl: string,
     private readonly sessionId: SessionId,
     private readonly role: SpeakerRole,
+    private readonly operatorToken?: string,
   ) {}
 
   connect(handlers: CaptionStreamHandlers): void {
@@ -36,6 +38,7 @@ export class CaptionStream {
         type: "session.attach",
         sessionId: this.sessionId,
         role: this.role,
+        ...(this.role === "speaker" && this.operatorToken ? { operatorToken: this.operatorToken } : {}),
       });
       handlers.onOpen?.();
     });

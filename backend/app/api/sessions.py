@@ -1,23 +1,25 @@
 """Session REST endpoints.
 
 Sessions are created by the control screen before the speaker starts. The
-WebSocket layer attaches to an existing session by id.
+WebSocket layer attaches to an existing session by id. There is deliberately no
+endpoint that lists sessions: ids are only shared by the mosque that made them.
 """
 
+import secrets
 import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
 from app.config import settings
-from app.models.contract import CreateSessionRequest, Session
+from app.models.contract import CreateSessionRequest, CreateSessionResponse, Session
 from app.store import sessions as session_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
-@router.post("", response_model=Session, status_code=201)
-async def create_session(body: CreateSessionRequest) -> Session:
+@router.post("", response_model=CreateSessionResponse, status_code=201)
+async def create_session(body: CreateSessionRequest) -> CreateSessionResponse:
     if body.sourceLanguage != "ar" or body.targetLanguages != ["en"]:
         raise HTTPException(
             status_code=422,
@@ -34,10 +36,9 @@ async def create_session(body: CreateSessionRequest) -> Session:
         status="pending",
         createdAt=datetime.now(UTC).isoformat(),
     )
-    await session_store.save(session)
-    # TODO: pre-connect ASR here so the speaker has zero cold-start latency on
-    # the first audio frame (see CLAUDE.md §2).
-    return session
+    operator_token = secrets.token_urlsafe(32)
+    await session_store.create(session, operator_token)
+    return CreateSessionResponse(**session.model_dump(), operatorToken=operator_token)
 
 
 @router.get("/{session_id}", response_model=Session)
@@ -46,8 +47,3 @@ async def get_session(session_id: str) -> Session:
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
-
-
-@router.get("", response_model=list[Session])
-async def list_sessions() -> list[Session]:
-    return await session_store.list_all()

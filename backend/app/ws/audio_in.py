@@ -34,6 +34,9 @@ async def handler(websocket: WebSocket, session_id: str) -> None:
         if session.status == "ended":
             await reject(websocket, session_id, "this session has ended")
             return
+        if not await session_store.is_operator(session_id, attach.operatorToken):
+            await reject(websocket, session_id, "only the operator's device can speak")
+            return
         lease_token = await speakers.acquire(session_id)
         if lease_token is None:
             await reject(websocket, session_id, "a speaker is already attached")

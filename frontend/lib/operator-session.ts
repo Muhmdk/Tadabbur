@@ -6,13 +6,14 @@
 
 const STORAGE_KEY = "tadabbur.operator-session";
 
-export type StoredOperatorSession = { id: string };
+/** The operator token stays on this device: it is what lets it speak. */
+export type StoredOperatorSession = { id: string; operatorToken: string };
 
 export function loadOperatorSession(storage: Pick<Storage, "getItem">): StoredOperatorSession | null {
   try {
-    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null") as unknown;
-    if (parsed && typeof parsed === "object" && typeof (parsed as StoredOperatorSession).id === "string") {
-      return { id: (parsed as StoredOperatorSession).id };
+    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null") as Partial<StoredOperatorSession> | null;
+    if (typeof parsed?.id === "string" && typeof parsed.operatorToken === "string") {
+      return { id: parsed.id, operatorToken: parsed.operatorToken };
     }
   } catch {
     // A corrupt entry is treated as no stored session.

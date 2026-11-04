@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-CONTRACT_VERSION = "0.2.0"
+CONTRACT_VERSION = "0.3.0"
 
 # ---------- Domain primitives ----------
 
@@ -34,6 +34,12 @@ class CreateSessionRequest(BaseModel):
     targetLanguages: list[Language]
 
 
+class CreateSessionResponse(Session):
+    # Secret that lets the control screen attach as the speaker. Never log it or
+    # put it in a URL; the public session id only grants read-only viewing.
+    operatorToken: str
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     version: str
@@ -56,6 +62,7 @@ class ClientAttach(BaseModel):
     type: Literal["session.attach"]
     sessionId: SessionId
     role: SpeakerRole
+    operatorToken: str | None = None  # required when role == "speaker"
 
 
 class ClientStop(BaseModel):
