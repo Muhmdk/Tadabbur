@@ -25,10 +25,10 @@ from app.models.contract import (
     ServerSessionState,
     Session,
 )
+from app.pipeline import quran
 from app.pipeline.asr.base import ASRProvider
 from app.pipeline.asr.speechmatics import SpeechmaticsASR
 from app.pipeline.clauses import ClauseAssembler
-from app.pipeline.quran import is_quranic_candidate
 from app.pipeline.translation.base import Translator
 from app.pipeline.translation.deepl import DeepLTranslator
 from app.pipeline.translation.google import GoogleTranslator
@@ -50,6 +50,8 @@ class SessionRuntime:
     resume_pending: bool = False
     resume_deadline: float = 0.0
     quranic_chunk_id: str | None = None
+    # Last words of the previous clause when it was Quran, to catch its continuation.
+    quran_tail: tuple[str, ...] = ()
     recitation_epoch: int = 0
     publish_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     lease_token: str | None = None
@@ -179,6 +181,7 @@ async def set_recitation_mode(runtime: SessionRuntime, active: bool) -> None:
         runtime.resume_pending = not active
         runtime.resume_deadline = time.monotonic() + 2.5 if not active else 0.0
         runtime.quranic_chunk_id = None
+        runtime.quran_tail = ()
         runtime.recitation_epoch += 1
         await redis_pubsub.publish(
             runtime.session.id,
@@ -236,7 +239,9 @@ async def _pump(runtime: SessionRuntime) -> None:
 
 
 async def _publish_partial(runtime: SessionRuntime, clause_id: str, text: str) -> None:
-    quranic = runtime.quranic_chunk_id == clause_id or is_quranic_candidate(text)
+    quranic = runtime.quranic_chunk_id == clause_id or quran.is_quranic_candidate(
+        text, after=runtime.quran_tail
+    )
     async with runtime.publish_lock:
         if runtime.recitation_active or runtime.resume_pending:
             return
@@ -258,10 +263,14 @@ async def _publish_partial(runtime: SessionRuntime, clause_id: str, text: str) -
 
 async def _publish_final(runtime: SessionRuntime, clause_id: str, clause: str) -> None:
     session = runtime.session
-    quranic = runtime.quranic_chunk_id == clause_id or is_quranic_candidate(clause)
+    quranic = runtime.quranic_chunk_id == clause_id or quran.is_quranic_candidate(
+        clause, after=runtime.quran_tail
+    )
     epoch = runtime.recitation_epoch
     if runtime.recitation_active or runtime.resume_pending:
         return
+    # Classified in ASR order, before any await, so the next clause sees this one.
+    runtime.quran_tail = quran.continuation_tail(runtime.quran_tail, clause) if quranic else ()
     translations: dict[str, str] = {}
     if not quranic:
         try:

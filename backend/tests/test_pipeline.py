@@ -265,3 +265,33 @@ async def test_translation_failure_publishes_untranslated_phrase_and_keeps_going
     finals = [message for message in published if isinstance(message, ServerCaptionFinal)]
     assert [final.translations for final in finals] == [{}, {"en": "English meaning"}]
     assert finals[0].source == "هذه كلمة من الخطبة"  # Arabic still shown, marked untranslated
+
+
+@pytest.mark.asyncio
+async def test_short_tail_of_a_long_ayah_is_not_machine_translated(monkeypatch) -> None:
+    published = []
+
+    async def capture(session_id, message):
+        published.append(message)
+
+    monkeypatch.setattr(pipeline.redis_pubsub, "publish", capture)
+    kursi_end = "من ذا الذي يشفع عنده إلا بإذنه يعلم ما بين أيديهم وما خلفهم"
+    router = FakeRouter()
+    runtime = _runtime(
+        asr=FakeASR(
+            [
+                ASRTranscript(kursi_end, "ar", True, "1", 1),
+                ASRTranscript("", "ar", True, "1", 2, ends_utterance=True),
+                # A breath, then the last words of the phrase on their own.
+                ASRTranscript("ولا يحيطون بشيء", "ar", True, "2", 3),
+                ASRTranscript("", "ar", True, "2", 4, ends_utterance=True),
+                ASRTranscript("هذه كلمة من الخطبة اليوم", "ar", True, "3", 5),
+                ASRTranscript("", "ar", True, "3", 6, ends_utterance=True),
+            ]
+        ),
+        router=router,
+    )
+    await pipeline._pump(runtime)
+    finals = [m for m in published if isinstance(m, ServerCaptionFinal)]
+    assert [f.isQuranicCandidate for f in finals] == [True, True, False]
+    assert router.calls == ["هذه كلمة من الخطبة اليوم"]

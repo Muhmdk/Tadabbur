@@ -27,10 +27,12 @@ Its copyright and CC BY 3.0 terms are included at the end of
 <https://tanzil.net/>. SHA-256 of the downloaded file:
 `228df2a717671aeb9d2ff573002bd28d6b3f973f4bc7153554e3a81663d67610`.
 
-Six consecutive matching Arabic words, or a complete short ayah of three to
-five words spoken alone or after a Quran introduction, suppress translation
-and Arabic display. The operator can
-also switch Quran mode on manually. Transcript matching cannot identify every
+Translation and Arabic display are suppressed when a clause matches six
+consecutive corpus words, a complete short ayah of three to five words (alone or
+after a Quran introduction), the continuation of the previous Quran clause (so
+the end of a long ayah that arrives after a pause or the word cap is caught),
+or mostly lines up in order with one passage despite ASR mistakes. The operator
+can also switch Quran mode on manually. Transcript matching cannot identify every
 recitation: very short fragments, alternate wording, and ASR errors can be
 missed. Operators should use Quran mode whenever recitation begins.
 
