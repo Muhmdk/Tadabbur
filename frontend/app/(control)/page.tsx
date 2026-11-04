@@ -13,6 +13,7 @@ import {
   saveOperatorSession,
 } from "@/lib/operator-session";
 import { selectPublicCaption } from "@/lib/public-caption";
+import { useScreenWakeLock } from "@/lib/wake-lock";
 import { CaptionStream } from "@/lib/ws-client";
 
 type RunState = "idle" | "preparing" | "starting" | "live" | "reconnecting" | "stopping" | "error";
@@ -420,6 +421,8 @@ export default function ControlPage() {
   const isReconnecting = runState === "reconnecting";
   const isOnAir = isLive || isReconnecting;
   const isBusy = runState === "preparing" || runState === "starting" || runState === "stopping";
+  // A sleeping screen suspends the microphone; keep it on while broadcasting.
+  const wakeLockHeld = useScreenWakeLock(isOnAir);
   const latest = finals.at(-1);
   const previous = finals.at(-2);
   const publicPreview = selectPublicCaption(
@@ -442,7 +445,9 @@ export default function ControlPage() {
           : isLoopback
             ? "Open Tadabbur at a network address before sharing the phone link."
             : "Open the projector and share the attendee link before Arabic begins."
-        : "Arabic translation is live. End it when the khutbah finishes.";
+        : wakeLockHeld === false
+          ? "Arabic translation is live. This browser can't keep the screen awake: turn off auto-lock so the microphone keeps running."
+          : "Arabic translation is live. End it when the khutbah finishes.";
 
   return (
     <main className="min-h-[100dvh] bg-[#0b1512] text-[#f5f2ea]">
