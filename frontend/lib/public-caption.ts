@@ -11,8 +11,11 @@ export function nextPartialCaptionState(
 }
 
 /**
- * Hold a Quran notice across ASR clause boundaries. A new partial is not yet
- * classified, so it cannot safely clear the last confirmed recitation.
+ * The latest completed caption stays on screen until the next final replaces
+ * it, so attendees can read it while the khatib continues speaking. Only the
+ * Quran notice depends on the in-progress phrase: it holds across ASR clause
+ * boundaries, because a new partial is not yet classified and so cannot
+ * safely clear the last confirmed recitation.
  */
 export function selectPublicCaption(
   latest: ServerCaptionFinal | null,
@@ -20,7 +23,7 @@ export function selectPublicCaption(
   manualQuran: boolean,
 ): { caption: ServerCaptionFinal | null; isQuranActive: boolean } {
   return {
-    caption: partialState === "none" ? latest : null,
+    caption: latest,
     isQuranActive: manualQuran || partialState === "quran" || Boolean(latest?.isQuranicCandidate),
   };
 }
