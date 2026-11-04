@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import health, sessions
+from app.broadcast import local_fanout
 from app.config import settings
 from app.pipeline import quran
 from app.pipeline.session import close_all_sessions
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(quran.warm)
     yield
     await close_all_sessions()
+    await local_fanout.drain()
     await close_redis()
 
 
