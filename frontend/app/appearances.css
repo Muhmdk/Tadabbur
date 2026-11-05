@@ -1,0 +1,618 @@
+/* Four selectable designs, with the original retained unchanged. */
+.appearance-gallery {
+  margin:0 0 28px
+}
+.appearance-choices {
+  min-width:0;
+  border:0;
+  padding:0;
+  margin:0
+}
+.appearance-choices legend {
+  font:10px 'Messina Mono',monospace;
+  text-transform:uppercase;
+  letter-spacing:.07em;
+  margin-bottom:15px
+}
+.appearance-options {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:14px
+}
+.appearance-option {
+  padding:7px 7px 12px;
+  min-width:0;
+  border:1px solid #b6b3a5;
+  background:#eeede5;
+  color:#292822;
+  text-align:left;
+  border-radius:4px
+}
+.appearance-option[aria-pressed=true] {
+  border:2px solid #78623f;
+  padding:6px 6px 11px
+}
+.appearance-option-title {
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  padding:12px 5px 0;
+  font:600 13px 'Source Sans 3',sans-serif
+}
+.appearance-option-note {
+  display:block;
+  padding:5px 5px 0;
+  font-size:10px;
+  line-height:1.5;
+  color:#716a5a
+}
+.appearance-swatch {
+  position:relative;
+  display:flex;
+  min-height:110px;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  gap:7px;
+  overflow:hidden
+}
+.appearance-swatch::before {
+  content:'';
+  position:absolute;
+  width:160px;
+  height:160px;
+  background:url('/images/geometric-pattern.svg') center/contain;
+  left:-65px;
+  bottom:-85px;
+  opacity:.24
+}
+.swatch-arabic {
+  font:24px/1.3 Amiri,serif;
+  position:relative
+}
+.swatch-english {
+  font:10px 'Source Sans 3',sans-serif;
+  position:relative
+}
+.swatch-ornament {
+  position:absolute;
+  right:12px;
+  top:9px;
+  color:#b89a59;
+  font-size:10px
+}
+.swatch-classic {
+  background:#f3f2eb;
+  color:#22221e
+}
+.swatch-classic::before,.swatch-classic .swatch-ornament {
+  display:none
+}
+.swatch-burgundy {
+  background:#591c28;
+  color:#efdbab
+}
+.swatch-ivory {
+  background:#fbf5e9;
+  color:#672635;
+  box-shadow:inset 0 0 0 6px #fff,inset 0 0 0 7px #d6bd89
+}
+.swatch-midnight {
+  background:#102e36;
+  color:#eee7cf
+}
+.swatch-midnight::after {
+  content:'';
+  position:absolute;
+  inset:8px 27px;
+  border:1px solid #b99e60;
+  border-radius:50% 50% 0 0;
+  opacity:.4
+}
+.appearance-menu {
+  position:relative;
+  z-index:20;
+  flex-shrink:0
+}
+.appearance-menu summary {
+  cursor:pointer;
+  list-style:none;
+  padding:10px 12px;
+  border:1px solid currentColor;
+  border-radius:3px;
+  font-size:9px;
+  display:flex;
+  gap:12px
+}
+.appearance-menu summary::-webkit-details-marker {
+  display:none
+}
+.appearance-menu>.appearance-choices {
+  position:absolute;
+  right:0;
+  top:calc(100% + 12px);
+  width:min(630px,calc(100vw - 48px));
+  padding:20px;
+  background:#e9e7dd;
+  color:#292822;
+  border:1px solid #b8ad96;
+  border-radius:5px;
+  box-shadow:0 15px 45px #0003
+}
+.appearance-menu .appearance-options {
+  grid-template-columns:repeat(2,minmax(0,1fr))
+}
+.appearance-menu .appearance-swatch {
+  min-height:86px
+}
+.attendee-appearance {
+  display:flex;
+  justify-content:flex-end;
+  padding:12px 20px 0
+}
+.attendee-appearance .appearance-menu>.appearance-choices {
+  width:min(360px,calc(100vw - 32px))
+}
+[data-appearance=burgundy] {
+  --design-bg:#591c28;
+  --design-paper:#652430;
+  --design-ink:#fcf5e7;
+  --design-accent:#e1c586;
+  --design-muted:#e0c49c;
+  --design-line:#ad844a80
+}
+[data-appearance=ivory] {
+  --design-bg:#fffdfa;
+  --design-paper:#f9f3e7;
+  --design-ink:#592633;
+  --design-accent:#957336;
+  --design-muted:#80695b;
+  --design-line:#c9af7c80
+}
+[data-appearance=midnight] {
+  --design-bg:#102e36;
+  --design-paper:#173a41;
+  --design-ink:#f1ecd9;
+  --design-accent:#d9bd7e;
+  --design-muted:#c2c8b6;
+  --design-line:#a8935b70
+}
+[data-appearance]:not([data-appearance=classic]) {
+  background:var(--design-bg);
+  color:var(--design-ink);
+  font-family:'Source Sans 3',sans-serif
+}
+[data-appearance]:not([data-appearance=classic]) .wordmark {
+  font-family:'Source Sans 3',sans-serif;
+  font-weight:600;
+  letter-spacing:-.04em;
+  text-transform:none
+}
+[data-appearance]:not([data-appearance=classic]) .brand-arabic {
+  font-family:Amiri,serif;
+  border-color:var(--design-line);
+  color:var(--design-accent)
+}
+[data-appearance]:not([data-appearance=classic]) .mono {
+  font-family:'Source Sans 3',sans-serif;
+  font-weight:600;
+  letter-spacing:.14em
+}
+[data-appearance]:not([data-appearance=classic]) .projector-occasion {
+  color:var(--design-muted)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-stage {
+  position:relative;
+  background:transparent;
+  color:var(--design-ink);
+  border:0
+}
+[data-appearance]:not([data-appearance=classic]) .projector-stage::before {
+  content:'';
+  position:absolute;
+  width:360px;
+  height:360px;
+  left:-95px;
+  bottom:-35px;
+  background:url('/images/geometric-pattern.svg') center/contain;
+  opacity:.11;
+  pointer-events:none
+}
+[data-appearance]:not([data-appearance=classic]) .projector-panel-heading {
+  position:relative;
+  border-color:var(--design-line);
+  color:var(--design-accent)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-panel-heading>span:first-child::before {
+  content:'✦';
+  font-size:17px;
+  margin-right:13px
+}
+[data-appearance]:not([data-appearance=classic]) .projector-caption-area {
+  position:relative
+}
+[data-appearance]:not([data-appearance=classic]) .projector-stage .caption-label {
+  color:var(--design-muted)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-source>p {
+  font-family:Amiri,serif;
+  font-weight:400;
+  color:var(--design-accent);
+  font-size:clamp(1.9rem,3.5vw,4rem);
+  line-height:1.9
+}
+[data-appearance]:not([data-appearance=classic]) .projector-translation>p {
+  font-family:'Source Sans 3',sans-serif;
+  font-weight:400;
+  font-size:clamp(1.55rem,2.65vw,3.2rem);
+  line-height:1.55;
+  letter-spacing:0;
+  color:var(--design-ink)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-source {
+  border-color:var(--design-line)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-panel-footer {
+  position:relative;
+  border-color:var(--design-line)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-fullscreen,[data-appearance]:not([data-appearance=classic]) .projector-qr {
+  color:var(--design-muted)
+}
+[data-appearance]:not([data-appearance=classic]) .caption-speaking i {
+  background:var(--design-accent)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-notice h1 {
+  font-family:'Source Sans 3',sans-serif;
+  font-weight:500;
+  font-size:clamp(2.2rem,5vw,5.5rem);
+  letter-spacing:-.025em;
+  text-transform:none;
+  color:var(--design-ink)
+}
+[data-appearance]:not([data-appearance=classic]) .recitation-symbol {
+  color:var(--design-accent)
+}
+[data-appearance]:not([data-appearance=classic]) .projector-notice>p,[data-appearance]:not([data-appearance=classic]) .caption-listening {
+  color:var(--design-muted)
+}
+/* Burgundy: a bilingual spread and an ornamental centre divider. */
+[data-appearance=burgundy] .projector-caption-pair {
+  grid-template-columns:1fr 1fr;
+  grid-template-rows:1fr;
+  position:relative;
+  background:linear-gradient(var(--design-line),var(--design-line)) center/1px 78% no-repeat
+}
+[data-appearance=burgundy] .projector-caption-pair::after {
+  content:'✦';
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
+  font-size:27px;
+  color:var(--design-accent);
+  line-height:1;
+  background:var(--design-bg);
+  padding:6px 0
+}
+[data-appearance=burgundy] .projector-source {
+  grid-column:2;
+  grid-row:1;
+  border:0;
+  justify-content:center;
+  padding:0 0 0 48px
+}
+[data-appearance=burgundy] .projector-translation {
+  grid-column:1;
+  grid-row:1;
+  justify-content:center;
+  padding:0 48px 0 0
+}
+[data-appearance=burgundy] .projector-source>p {
+  text-align:center
+}
+/* Ivory: a framed manuscript page with a quiet gold seal. */
+.projector-surface[data-appearance=ivory] .projector-stage {
+  background:var(--design-paper);
+  border:1px solid #dac69e;
+  box-shadow:inset 0 0 0 7px #fff8,inset 0 0 0 8px #dac69e66;
+  padding:clamp(25px,3.5vw,54px)
+}
+[data-appearance=ivory] .projector-stage::before {
+  opacity:.09;
+  width:290px;
+  height:290px;
+  left:auto;
+  right:-80px;
+  bottom:-55px
+}
+[data-appearance=ivory] .projector-caption-pair {
+  position:relative
+}
+[data-appearance=ivory] .projector-caption-pair::after {
+  content:'✦';
+  position:absolute;
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  color:#b49451;
+  background:var(--design-paper);
+  padding:0 15px;
+  font-size:20px
+}
+[data-appearance=ivory] .projector-source,[data-appearance=ivory] .projector-translation {
+  align-items:center;
+  justify-content:center;
+  text-align:center
+}
+[data-appearance=ivory] .projector-source>.caption-label,[data-appearance=ivory] .projector-translation>.caption-label {
+  width:100%;
+  justify-content:center;
+  gap:14px
+}
+[data-appearance=ivory] .projector-source>p {
+  color:var(--design-ink);
+  margin-left:0
+}
+/* Midnight: an architectural arch, ink blue and brass. */
+.projector-surface[data-appearance=midnight] .projector-stage {
+  border:1px solid var(--design-line)
+}
+[data-appearance=midnight] .projector-stage::after {
+  content:'';
+  position:absolute;
+  inset:28px 6% 24px;
+  border:1px solid #bda36555;
+  border-bottom:0;
+  border-radius:50% 50% 0 0 / 35% 35% 0 0;
+  pointer-events:none
+}
+[data-appearance=midnight] .projector-stage::before {
+  width:320px;
+  height:320px;
+  left:auto;
+  right:-85px;
+  bottom:-45px;
+  opacity:.13
+}
+[data-appearance=midnight] .projector-caption-pair {
+  padding:0 6%
+}
+[data-appearance=midnight] .projector-source,[data-appearance=midnight] .projector-translation {
+  text-align:center;
+  align-items:center;
+  justify-content:center
+}
+[data-appearance=midnight] .projector-source {
+  border:0
+}
+[data-appearance=midnight] .projector-source>p {
+  margin-left:0
+}
+[data-appearance=midnight] .caption-label {
+  justify-content:center;
+  gap:12px
+}
+[data-appearance=midnight] .projector-translation::before {
+  content:'✦';
+  color:var(--design-accent);
+  font-size:16px;
+  margin-bottom:12px
+}
+[data-appearance=midnight] .projector-panel-heading {
+  border:0
+}
+/* Theme the accompanying controls and phone view without changing the caption pipeline. */
+.control-shell[data-appearance]:not([data-appearance=classic]) .section-kicker,.control-shell[data-appearance]:not([data-appearance=classic]) .operator-grid,.control-shell[data-appearance]:not([data-appearance=classic]) .session-controls {
+  border-color:var(--design-line)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .caption-monitor {
+  background:var(--design-paper);
+  color:var(--design-ink)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .caption-monitor .caption-label,.control-shell[data-appearance]:not([data-appearance=classic]) .panel-label,.control-shell[data-appearance]:not([data-appearance=classic]) .empty-caption {
+  color:var(--design-muted)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .arabic-caption {
+  font-family:Amiri,serif
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .english-caption {
+  font-family:'Source Sans 3',sans-serif
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .workspace-heading>div>p,.control-shell[data-appearance]:not([data-appearance=classic]) .step-hint,.control-shell[data-appearance]:not([data-appearance=classic]) .recitation-control p,.control-shell[data-appearance]:not([data-appearance=classic]) .share-details p,.control-shell[data-appearance]:not([data-appearance=classic]) .nav-note {
+  color:var(--design-muted)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .demo-launch {
+  border-color:var(--design-line);
+  background:var(--design-paper)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .demo-launch .mono,.control-shell[data-appearance]:not([data-appearance=classic]) .demo-launch-copy {
+  color:var(--design-muted)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .primary-action:not(.end-action) {
+  background:var(--design-accent);
+  color:var(--design-bg);
+  border-color:var(--design-accent)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .setup-steps li {
+  color:var(--design-muted);
+  border-color:var(--design-line)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .setup-steps li[aria-current] {
+  color:var(--design-accent)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .flow-grid article {
+  border-color:var(--design-line)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .flow-grid p {
+  color:var(--design-muted)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .site-footer {
+  background:var(--design-paper);
+  color:var(--design-ink);
+  border-color:var(--design-line)
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .footer-top,.control-shell[data-appearance]:not([data-appearance=classic]) .footer-bottom {
+  color:var(--design-muted);
+  border-color:var(--design-line)
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) .attendee-caption {
+  background:var(--design-paper);
+  border-color:var(--design-line);
+  position:relative
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) .attendee-caption::before {
+  content:'';
+  position:absolute;
+  inset:0;
+  background:url('/images/geometric-pattern.svg') left bottom/180px no-repeat;
+  opacity:.07;
+  pointer-events:none
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) .attendee-caption .font-arabic {
+  font-family:Amiri,serif;
+  color:var(--design-accent)
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) .attendee-caption .font-caption {
+  font-family:'Source Sans 3',sans-serif;
+  color:var(--design-ink)
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) header,.attendee-surface[data-appearance]:not([data-appearance=classic]) footer {
+  border-color:var(--design-line)
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) header>div>div:first-child {
+  color:var(--design-ink);
+  font-family:'Source Sans 3',sans-serif;
+  text-transform:none
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) footer {
+  color:var(--design-muted)
+}
+@media(max-width:900px) {
+  .projector-occasion {
+    display:none
+  }
+  .appearance-options {
+    grid-template-columns:repeat(2,minmax(0,1fr))
+  }
+  [data-appearance=burgundy] .projector-source {
+    padding-left:28px
+  }
+  [data-appearance=burgundy] .projector-translation {
+    padding-right:28px
+  }
+}
+@media(max-width:640px) {
+  .projector-masthead {
+    flex-wrap:wrap;
+    gap:8px;
+    padding:14px 0
+  }
+  .projector-masthead>.appearance-menu {
+    order:3;
+    width:100%
+  }
+  .projector-masthead .appearance-menu summary {
+    width:max-content;
+    margin-left:auto
+  }
+  .projector-masthead .appearance-choices {
+    width:calc(100vw - 36px)
+  }
+  [data-appearance=burgundy] .projector-caption-pair {
+    grid-template-columns:1fr;
+    grid-template-rows:1fr 1fr;
+    background:none
+  }
+  [data-appearance=burgundy] .projector-source {
+    grid-column:1;
+    grid-row:1;
+    padding:12px 0;
+    border-bottom:1px solid var(--design-line)
+  }
+  [data-appearance=burgundy] .projector-translation {
+    grid-column:1;
+    grid-row:2;
+    padding:12px 0
+  }
+  [data-appearance=burgundy] .projector-caption-pair::after {
+    display:none
+  }
+  [data-appearance]:not([data-appearance=classic]) .projector-source>p {
+    font-size:clamp(1.4rem,6vw,2rem);
+    line-height:1.6
+  }
+  [data-appearance]:not([data-appearance=classic]) .projector-translation>p {
+    font-size:clamp(1.2rem,5vw,1.8rem);
+    line-height:1.45
+  }
+  [data-appearance=midnight] .projector-caption-pair {
+    padding:0
+  }
+  [data-appearance=midnight] .projector-stage::after {
+    inset:20px 3% 20px
+  }
+}
+@media(max-height:650px) and (min-width:641px) {
+  [data-appearance]:not([data-appearance=classic]) .projector-source>p {
+    font-size:clamp(1.5rem,4.8vh,2.8rem);
+    line-height:1.6
+  }
+  [data-appearance]:not([data-appearance=classic]) .projector-translation>p {
+    font-size:clamp(1.4rem,4.6vh,2.6rem)
+  }
+}
+.appearance-menu legend {
+  float:left;
+  width:100%;
+}
+.appearance-menu .appearance-options {
+  clear:both;
+}
+.projector-surface[data-appearance=ivory] .projector-source>p {
+  color:var(--design-ink);
+}
+.projector-surface[data-appearance=ivory] .projector-stage::before {
+  left:auto;
+  right:-80px;
+  width:290px;
+  height:290px;
+  opacity:.09;
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) .attendee-caption p {
+  color:var(--design-ink);
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) footer>div:first-child,.attendee-surface[data-appearance]:not([data-appearance=classic]) footer a {
+  color:var(--design-muted);
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) .caption-history>div {
+  color:var(--design-muted);
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) header .uppercase {
+  color:var(--design-accent);
+}
+.attendee-surface[data-appearance]:not([data-appearance=classic]) [aria-label^="Caption language"],.attendee-surface[data-appearance]:not([data-appearance=classic]) button[aria-label$="text size"] {
+  background:var(--design-paper);
+  color:var(--design-accent);
+  border-color:var(--design-line);
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .caption-monitor .waiting-caption>span:last-child {
+  color:var(--design-muted);
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .quran-switch {
+  border-color:var(--design-accent);
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .quran-switch>span {
+  background:var(--design-accent);
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .quran-switch[aria-checked=true] {
+  background:var(--design-accent);
+}
+.control-shell[data-appearance]:not([data-appearance=classic]) .quran-switch[aria-checked=true]>span {
+  background:var(--design-bg);
+}
+.control-shell[data-appearance=ivory] .primary-action:not(.end-action) {
+  background:#592633;
+  color:#fffdfa;
+  border-color:#592633;
+}

@@ -3,10 +3,18 @@
 Next.js (App Router) UI for Tadabbur. Three surfaces:
 
 - **Control screen** (`/`) — prepare and share a session during the English khutbah, then start Arabic translation and control Quran mode.
-- **Projector display** (`/display/[sessionId]`) — large final captions and recitation notices.
-- **Attendee view** (`/join/[sessionId]`) — phone-sized final captions.
+- **Projector display** (`/display/[sessionId]`) — live Arabic followed by its own completed English translation, with recitation notices.
+- **Attendee view** (`/join/[sessionId]`) — the same continuous caption flow in a phone layout.
 
 See root `CLAUDE.md` for the bigger picture.
+
+## Display designs
+
+The session page includes four design previews: Original, Burgundy Majlis,
+Ivory Manuscript, and Midnight Mihrab. The projector and phone have a compact
+Design menu. Selection updates the `theme` URL parameter and is remembered on
+the device; attendee links and QR codes carry it to other devices. Theme
+changes do not reconnect the caption stream or change Quran suppression.
 
 ## Run
 
@@ -18,8 +26,8 @@ npm run dev
 Open the control page at `http://localhost:3000` on the operator computer. To
 let phones join on the same Wi-Fi, open it through the computer's LAN address,
 such as `http://192.168.1.50:3000`, and share the generated link. With no
-frontend environment overrides, the browser uses that same host on port 8000
-for the backend. The browser may require HTTPS before it allows microphone
+frontend environment overrides, the browser uses the same-origin API and
+WebSocket proxy to the backend on port 8000. The browser may require HTTPS before it allows microphone
 access from a non-localhost address. A production HTTPS site needs
 `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_WS_BASE_URL` pointed at its
 reachable secure backend, or a reverse proxy for same-origin `/api` and

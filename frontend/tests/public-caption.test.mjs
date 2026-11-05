@@ -29,6 +29,19 @@ function loadTypeScript(path, jsx = false) {
 const CaptionRenderer = loadTypeScript("components/CaptionRenderer.tsx", true).default;
 const { resolveEndpoints } = loadTypeScript("lib/endpoints.ts");
 const { nextPartialCaptionState, selectPublicCaption } = loadTypeScript("lib/public-caption.ts");
+const { APPEARANCES, appearanceFrom, withAppearance } = loadTypeScript("lib/appearance.ts");
+
+test("display designs preserve the original and validate saved or shared choices", () => {
+  assert.equal(APPEARANCES.length, 4);
+  for (const { id } of APPEARANCES) assert.equal(appearanceFrom(id), id);
+  assert.equal(appearanceFrom("unknown"), "classic");
+  assert.equal(appearanceFrom(null), "classic");
+});
+
+test("design links preserve the session, other parameters and anchor", () => {
+  assert.equal(withAppearance("/display/session?theme=classic&test=1#captions", "burgundy"), "/display/session?theme=burgundy&test=1#captions");
+  assert.equal(withAppearance("https://example.org/join/session", "ivory"), "https://example.org/join/session?theme=ivory");
+});
 const ordinary = {
   type: "caption.final",
   sessionId: "session",
@@ -68,6 +81,38 @@ for (const variant of ["projector", "attendee"]) {
     assert.match(html, /English translation marker/);
   });
 
+  test(`${variant}: live Arabic never borrows English from the previous phrase`, () => {
+    for (const text of ["New", "New Arabic", "New Arabic phrase"]) {
+      const selected = selectPublicCaption(ordinary, "listening", false, text);
+      const html = show(selected.caption, { interimSource: selected.interimSource });
+      assert.match(html, new RegExp(text));
+      assert.doesNotMatch(html, /English translation marker/);
+      assert.doesNotMatch(html, /Arabic source marker|Waiting for the speaker|A moment to listen/);
+    }
+  });
+
+  test(`${variant}: English appears with its own finalized Arabic and remains during silence`, () => {
+    const selected = selectPublicCaption(ordinary, "none", false);
+    const html = show(selected.caption, { interimSource: selected.interimSource });
+    assert.match(html, /Arabic source marker/);
+    assert.match(html, /English translation marker/);
+    assert.equal(selected.interimSource, "");
+  });
+
+  test(`${variant}: the first partial is visible before any translation exists`, () => {
+    const html = show(null, { interimSource: "First spoken words" });
+    assert.match(html, /First spoken words/);
+    assert.doesNotMatch(html, /English translation marker/);
+  });
+
+  test(`${variant}: Quran detection immediately hides live Arabic and retained English`, () => {
+    const selected = selectPublicCaption(ordinary, "quran", false, "Unsafe partial");
+    assert.equal(selected.interimSource, "");
+    const html = show(selected.caption, { interimSource: "Unsafe partial", isQuranActive: selected.isQuranActive });
+    assert.match(html, /Quran being read/);
+    assert.doesNotMatch(html, /Unsafe partial|English translation marker|Arabic source marker/);
+  });
+
   test(`${variant}: Quran notice stays visible between recited clauses until ordinary speech is final`, () => {
     const quran = { ...ordinary, chunkId: "verse", isQuranicCandidate: true };
     const duringNextPartial = selectPublicCaption(quran, "listening", false);
@@ -102,4 +147,9 @@ test("partial Quran detection stays latched until the next final caption", () =>
   assert.equal(nextPartialCaptionState("none", true), "quran");
   assert.equal(nextPartialCaptionState("quran", false), "quran");
   assert.equal(nextPartialCaptionState("none", false), "listening");
+});
+
+test("manual Quran mode and held scripture cannot expose new partial text", () => {
+  assert.equal(selectPublicCaption(ordinary, "listening", true, "Unsafe partial").interimSource, "");
+  assert.equal(selectPublicCaption({ ...ordinary, isQuranicHadithCandidate: true }, "listening", false, "Unsafe partial").interimSource, "");
 });

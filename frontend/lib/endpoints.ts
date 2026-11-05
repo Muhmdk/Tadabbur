@@ -15,8 +15,8 @@ export function resolveEndpoints(
 
 export function browserEndpoints(): { api: string; ws: string; join: string } {
   return resolveEndpoints(window.location.href, {
-    api: process.env.NEXT_PUBLIC_API_BASE_URL,
-    ws: process.env.NEXT_PUBLIC_WS_BASE_URL,
-    join: process.env.NEXT_PUBLIC_JOIN_BASE_URL,
+    api: process.env.NEXT_PUBLIC_API_BASE_URL || window.location.origin,
+    ws: process.env.NEXT_PUBLIC_WS_BASE_URL || window.location.origin.replace(/^http/, "ws"),
+    join: window.location.protocol === "https:" ? window.location.origin : process.env.NEXT_PUBLIC_JOIN_BASE_URL,
   });
 }

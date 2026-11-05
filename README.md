@@ -138,3 +138,47 @@ required.
 - This is a working development prototype, not a production deployment.
 - See [`AGENTS.md`](./AGENTS.md) for engineering rules and
   [`BACKLOG.md`](./BACKLOG.md) for deferred product work.
+
+## Local scripted simulation
+
+The **Simulate live demo** link opens a shared projector fixture. It starts on
+demand in the simulation backend and keeps running without an operator tab.
+When opened through an HTTPS tunnel, the phone link uses that public address.
+The frontend proxies both the API and caption WebSockets to the backend.
+
+This mode exercises the real REST API, clause assembly, Quran detection, session
+controls, and WebSocket fan-out using scripted Arabic/English and the existing
+in-memory test Redis implementation. It makes no paid provider calls and does
+not capture microphone audio. The script repeats until **End simulation**.
+Simulation banners identify the content on every screen. Session state resets
+when this backend stops. Ordinary startup remains provider-backed.
+
+In PowerShell, start the backend:
+
+```powershell
+cd C:/Users/jasim/Tadabbur/backend
+$env:ALLOWED_ORIGINS='http://localhost:3000,http://127.0.0.1:3000,http://192.168.86.99:3000'
+./.venv/Scripts/python.exe -m uvicorn simulate:app --host 0.0.0.0 --port 8000
+```
+
+Start the frontend in another terminal:
+
+```powershell
+cd C:/Users/jasim/Tadabbur/frontend
+$env:NEXT_PUBLIC_SIMULATION='1'
+$env:NEXT_PUBLIC_JOIN_BASE_URL='http://192.168.86.99:3000'
+npm run dev -- --hostname 0.0.0.0 --port 3000
+```
+
+Open the control screen, select **Prepare session**, open the audience links,
+and select **Start simulation**. A phone on the same Wi-Fi can use the QR code.
+Replace the LAN address above if the computer's network address changes.
+The script includes a Quran passage to demonstrate suppression, and manual
+Quran mode also works. The fixture is illustrative prose, not an actual sermon.
+
+Verify the scripted provider with:
+
+```powershell
+cd C:/Users/jasim/Tadabbur/backend
+./.venv/Scripts/python.exe simulate.py --check
+```

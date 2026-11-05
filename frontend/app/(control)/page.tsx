@@ -4,10 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
+import AppearancePicker from "@/components/AppearancePicker";
+import { useAppearance, withAppearance } from "@/lib/appearance";
+import { DEMO_SESSION_ID } from "@/lib/demo";
 import { PcmMicrophone } from "@/lib/microphone";
 import { browserEndpoints } from "@/lib/endpoints";
 import { selectPublicCaption } from "@/lib/public-caption";
 import { CaptionStream } from "@/lib/ws-client";
+
+const SIMULATION = process.env.NEXT_PUBLIC_SIMULATION === "1";
 
 type RunState = "idle" | "preparing" | "starting" | "live" | "stopping" | "error";
 
@@ -29,6 +34,7 @@ async function responseError(response: Response): Promise<string> {
 }
 
 export default function ControlPage() {
+  const { appearance, chooseAppearance } = useAppearance();
   const [runState, setRunState] = useState<RunState>("idle");
   const [sessionId, setSessionId] = useState("");
   const [partial, setPartial] = useState("");
@@ -127,11 +133,13 @@ export default function ControlPage() {
     setMicLevel(0);
     setBytesSent(0);
     try {
-      if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
+      if (!SIMULATION && (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode)) {
         throw new Error("A secure browser with microphone and AudioWorklet support is required.");
       }
-      const microphoneCheck = await navigator.mediaDevices.getUserMedia({ audio: true });
-      microphoneCheck.getTracks().forEach((track) => track.stop());
+      if (!SIMULATION) {
+        const microphoneCheck = await navigator.mediaDevices.getUserMedia({ audio: true });
+        microphoneCheck.getTracks().forEach((track) => track.stop());
+      }
       const endpoints = browserEndpoints();
       const response = await fetch(`${endpoints.api}/api/sessions`, {
         method: "POST",
@@ -162,7 +170,7 @@ export default function ControlPage() {
     setMicLevel(0);
     setBytesSent(0);
     try {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access requires a secure browser connection.");
+      if (!SIMULATION && !navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access requires a secure browser connection.");
       const endpoints = browserEndpoints();
       const session = { id: sessionId };
       const viewer = new CaptionStream(endpoints.ws, session.id, "viewer");
@@ -210,12 +218,14 @@ export default function ControlPage() {
           new Promise<void>((_, reject) => window.setTimeout(() => reject(new Error("Quran mode was not confirmed before microphone capture.")), 5000)),
         ]);
       }
-      const microphone = new PcmMicrophone();
-      microphoneRef.current = microphone;
-      await microphone.start(
-        (chunk) => { if (!speaker.sendAudio(chunk)) failSession("Audio stopped reaching the transcription server."); },
-        (stats) => { setMicLevel(stats.level); setBytesSent(stats.bytesSent); },
-      );
+      if (!SIMULATION) {
+        const microphone = new PcmMicrophone();
+        microphoneRef.current = microphone;
+        await microphone.start(
+          (chunk) => { if (!speaker.sendAudio(chunk)) failSession("Audio stopped reaching the transcription server."); },
+          (stats) => { setMicLevel(stats.level); setBytesSent(stats.bytesSent); },
+        );
+      }
       activeRef.current = true;
       setRunState("live");
     } catch (caught) {
@@ -297,8 +307,8 @@ export default function ControlPage() {
     recitationMode,
   );
   const publicQuranActive = publicPreview.isQuranActive;
-  const attendeeUrl = siteOrigin && sessionId ? `${siteOrigin}/join/${sessionId}` : "";
-  const displayUrl = siteOrigin && sessionId ? `${siteOrigin}/display/${sessionId}` : "";
+  const attendeeUrl = siteOrigin && sessionId ? withAppearance(`${siteOrigin}/join/${sessionId}`, appearance) : "";
+  const displayUrl = siteOrigin && sessionId ? withAppearance(`${siteOrigin}/display/${sessionId}`, appearance) : "";
   const isLoopback = siteOrigin ? /https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(siteOrigin) : false;
   const activeStep = isLive ? 3 : sessionId ? 2 : 1;
   const stepHint = activeStep === 1
@@ -310,115 +320,51 @@ export default function ControlPage() {
       : "Arabic translation is live. End it when the khutbah finishes.";
 
   return (
-    <main className="min-h-[100dvh] bg-[#0b1512] text-[#f5f2ea]">
-      <div className="mx-auto grid min-h-[100dvh] max-w-[1500px] lg:grid-cols-[310px_minmax(0,1fr)]">
-        <aside className="flex flex-col gap-5 border-b border-[#2a4139] bg-[#0e1a16] p-5 lg:h-[100dvh] lg:overflow-y-auto lg:overscroll-contain lg:border-b-0 lg:border-r lg:p-6">
-          <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-xl bg-[#d4a94f] font-arabic text-2xl font-bold text-[#12201b]" aria-hidden="true">ت</div>
-            <div><p className="text-lg font-bold">Tadabbur</p><p className="text-xs text-[#9db3aa]">Friday khutbah translation</p></div>
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#d4a94f]">Operator controls</p>
-            <h1 className="mt-2 text-2xl font-semibold leading-tight">Bridge the Arabic khutbah</h1>
-            <p className="mt-2 text-sm leading-relaxed text-[#b4c5bc]">Set up during the English khutbah. Start the microphone only when the Arabic khutbah begins.</p>
-          </div>
-          <ol aria-label="Friday setup steps" className="grid grid-cols-3 gap-2">
-            {[
-              ["Prepare", "Check the microphone; audio stays off."],
-              ["Share", isLoopback ? "Open Tadabbur at a network address for phone links." : "Open the projector and share the attendee link."],
-              ["Translate", "Start when Arabic speech begins."],
-            ].map(([title, description], index) => (
-              <li key={title} aria-label={`${title}: ${description}`} aria-current={activeStep === index + 1 ? "step" : undefined} className={`flex min-w-0 flex-col items-center gap-1.5 rounded-xl border p-2 text-center ${activeStep === index + 1 ? "border-[#d4a94f]/55 bg-[#d4a94f]/10" : "border-[#2a4139] bg-[#12201b]"}`}>
-                <span aria-hidden="true" className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold ${activeStep === index + 1 ? "bg-[#d4a94f] text-[#12201b]" : "bg-[#2a4139] text-[#c9d6cf]"}`}>{index + 1}</span>
-                <strong className="text-xs text-[#f5f2ea]">{title}</strong>
-              </li>
-            ))}
-          </ol>
-          <p className="-mt-3 text-xs leading-relaxed text-[#b4c5bc]">{stepHint}</p>
-          <div className="flex flex-col gap-3 lg:sticky lg:bottom-0 lg:z-10 lg:-mx-6 lg:border-y lg:border-[#2a4139] lg:bg-[#0e1a16] lg:px-6 lg:py-4">
-            <button
-              type="button"
-              onClick={() => void (isLive ? stop() : sessionId ? start() : prepare())}
-              disabled={isBusy}
-              className={`min-h-12 rounded-xl px-4 py-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-wait disabled:opacity-70 ${isLive ? "bg-[#5a302b] text-[#fff1ed] hover:bg-[#734039]" : "bg-[#d4a94f] text-[#12201b] hover:bg-[#e6c374]"}`}
-            >
-              {isLive ? "End Arabic translation" : runState === "preparing" ? "Preparing session…" : runState === "starting" ? "Starting transcription…" : runState === "stopping" ? "Ending session…" : sessionId ? "Start Arabic translation" : "Prepare session"}
-            </button>
-            <div className="rounded-xl border border-[#d4a94f]/40 bg-[#d4a94f]/5 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-[#f5f2ea]">Quran mode</p>
-                  <p className="mt-1 text-xs leading-relaxed text-[#c9d6cf]">Switch on before expected Quran recitation. Automatic detection can miss verses.</p>
-                </div>
-                <button type="button" role="switch" aria-checked={recitationMode || recitationArmed} aria-label="Quran mode" onClick={toggleRecitation} disabled={isBusy || recitationPending !== null} className={`relative h-8 w-14 shrink-0 rounded-full border transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d4a94f] disabled:cursor-not-allowed disabled:opacity-50 ${recitationMode || recitationArmed ? "border-[#d4a94f] bg-[#d4a94f]" : "border-[#4b6258] bg-[#2a4139]"}`}>
-                  <span className={`absolute top-1 h-5 w-5 rounded-full bg-[#0b1512] transition-all ${recitationMode || recitationArmed ? "left-7" : "left-1"}`} />
-                </button>
-              </div>
-              <p role="status" className="mt-3 text-xs font-medium text-[#e6c374]">{recitationPending !== null ? "Waiting for server confirmation…" : recitationMode ? "Active · public screens show “Quran being read”" : recitationArmed ? "Armed · Quran mode starts before the microphone" : isLive ? "Off · switch on before the next recitation" : "Off · arm now if recitation begins the Arabic khutbah"}</p>
-            </div>
-          </div>
-          {error && <p role="alert" className="rounded-xl border border-[#a85d4f] bg-[#2a1715] p-3 text-sm leading-relaxed text-[#ffd9d1]">{error}</p>}
-          <div>
-            <p className="mb-3 text-xs font-semibold uppercase tracking-[.1em] text-[#9db3aa]">Share live captions</p>
-            {attendeeUrl ? (
-              <div className="rounded-xl border border-[#2a4139] bg-[#12201b] p-4">
-                {!isLoopback && <div className="mb-4 inline-block rounded-lg bg-white p-2"><QRCodeSVG value={attendeeUrl} size={96} marginSize={0} level="M" /></div>}
-                <p className="break-all text-xs leading-relaxed text-[#c9d6cf]">{attendeeUrl}</p>
-                {isLoopback && <p className="mt-3 text-xs leading-relaxed text-[#e6c374]">This localhost link only works on this computer. Open Tadabbur using a network address or set a public join URL before sharing it with attendees.</p>}
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button type="button" onClick={() => void copyLink(attendeeUrl)} className="rounded-lg border border-[#3a5648] px-3 py-2 text-xs font-semibold text-[#e6c374] hover:bg-[#1c332a]">{copied ? "Copied" : "Copy attendee link"}</button>
-                  <a href={displayUrl} target="_blank" rel="noreferrer" className="rounded-lg border border-[#3a5648] px-3 py-2 text-xs font-semibold text-[#e6ded0] hover:bg-[#1c332a]">Open projector ↗</a>
-                </div>
-              </div>
-            ) : <p className="rounded-xl border border-[#2a4139] bg-[#12201b] p-3 text-xs leading-relaxed text-[#b4c5bc]">The projector and attendee links appear here after preparation.</p>}
-          </div>
-          <a href="https://tanzil.net" target="_blank" rel="noreferrer" className="text-xs text-[#9db3aa] underline underline-offset-2">Quran text reference: Tanzil Project</a>
-        </aside>
+    <main className="control-shell" data-appearance={appearance}>
+      <header className="site-nav">
+        <a href="/" className="wordmark">Tadabbur<span className="brand-arabic" lang="ar">تدبّر</span></a>
+        <nav aria-label="Main navigation"><a href="#session">Session control ↗</a><a href="#how-it-works">The Friday flow ↗</a></nav>
+        <span className="nav-note">One khutbah. Every heart.</span>
+      </header>
 
-        <section className="flex min-w-0 flex-col">
-          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1e332c] px-5 py-5 sm:px-8">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#9db3aa]">Live monitor</p>
-              <h2 className="mt-1 text-xl font-semibold">Arabic → English</h2>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className={`h-2.5 w-2.5 rounded-full ${isLive ? "bg-[#e5533d] livepulse" : runState === "error" ? "bg-[#e5533d]" : "bg-[#7c9186]"}`} aria-hidden="true" />
-              <span role="status" className="text-sm font-semibold text-[#c9d6cf]">{isLive ? "Microphone live" : isBusy ? runState === "preparing" ? "Preparing" : runState === "starting" ? "Connecting" : "Ending" : runState === "error" ? "Needs attention" : sessionId ? "Prepared · mic off" : "Ready to prepare"}</span>
-              <span className="ml-2 font-mono text-sm tabular-nums text-[#9db3aa]">{formatElapsed(elapsed)}</span>
-            </div>
-          </header>
-          <div className="grid flex-1 md:grid-cols-2">
-            <div className="flex min-h-[280px] flex-col border-b border-[#1e332c] p-5 md:border-b-0 md:border-r sm:p-8">
-              <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#9db3aa]">Arabic · operator monitor</p>
-              <div dir="rtl" lang="ar" className="mt-9 font-arabic text-[clamp(1.55rem,2.6vw,2.8rem)] leading-[1.8] text-[#f5f2ea]" aria-live="polite">
-                {partial || latest?.source || <span className="text-[#9db3aa]">بانتظار بداية الخطبة العربية</span>}
-              </div>
-              {partial && <p className="mt-3 text-xs text-[#e6c374]">In progress · visible to operator only</p>}
-              {!partial && previous && <p dir="rtl" lang="ar" className="mt-8 border-t border-[#2a4139] pt-6 font-arabic text-xl leading-[1.8] text-[#9db3aa]">{previous.source}</p>}
-              <div className="mt-auto pt-8">
-                <div className="flex h-7 items-end gap-1" aria-label={isLive ? "Microphone activity" : "Microphone off"}>
-                  {Array.from({ length: 20 }, (_, index) => <span key={index} className={`w-1.5 rounded-full transition-all duration-100 ${isLive && micLevel * 8 > (index + 1) / 20 ? "bg-[#d4a94f]" : "bg-[#2a4139]"}`} style={{ height: `${8 + (index % 5) * 4}px` }} />)}
-                </div>
-                <p className="mt-2 text-xs text-[#9db3aa]">{isLive ? `Microphone connected · ${Math.round(bytesSent / 1024)} KB sent` : "Microphone starts when you go live"}</p>
-              </div>
-            </div>
-            <div className="flex min-h-[280px] flex-col p-5 sm:p-8">
-              <p className="text-xs font-semibold uppercase tracking-[.13em] text-[#9db3aa]">English · public preview</p>
-              {publicQuranActive ? (
-                <div className="mt-9 rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 p-7 text-center text-2xl font-semibold text-[#f5f2ea]">Quran being read</div>
-              ) : publicPreview.caption?.isQuranicHadithCandidate ? (
-                <div className="mt-9 rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 p-7 text-center text-xl font-semibold text-[#f5f2ea]">Scriptural passage being read</div>
-              ) : (
-                <div className="mt-9 rounded-2xl border border-[#2a4139] bg-[#12201b] p-6 text-[clamp(1.2rem,2vw,2rem)] font-medium leading-[1.5] text-[#f5f2ea]">
-                  {publicPreview.caption?.translations.en || <span className="text-[#9db3aa]">{partial ? "Listening for the next phrase…" : "English captions appear here after each complete Arabic phrase."}</span>}
-                </div>
-              )}
-              {!publicQuranActive && publicPreview.caption && !publicPreview.caption.isQuranicHadithCandidate && previous && !previous.isQuranicHadithCandidate && <p className="mt-7 border-t border-[#2a4139] pt-6 text-lg leading-relaxed text-[#9db3aa]">{previous.translations.en}</p>}
-              <p className="mt-auto pt-8 text-xs leading-relaxed text-[#9db3aa]">Public screens show completed, checked phrases only. Partial Arabic is shown here for the operator.</p>
-            </div>
-          </div>
-        </section>
-      </div>
+      <section className="editorial-hero" aria-labelledby="hero-title">
+        <img className="hero-photo" src="/images/prayer-hall.jpg" alt="Sunlight falling through the windows of a mosque prayer hall" />
+        <div className="hero-shade" />
+        <div className="hero-top mono"><span>Live Arabic khutbah translation</span><span>Made for the masjid</span></div>
+        <div className="hero-center"><p className="hero-arabic" lang="ar" dir="rtl">نستمع. نفهم. نتدبّر.</p><p className="mono">Listen. Understand. Reflect.</p></div>
+        <div className="hero-bottom"><h1 id="hero-title">Closer to<br />every word.</h1><div className="hero-caption"><p>One shared moment.<br />A deeper understanding.</p><a href="#session" className="hero-link mono">Prepare your session <span>↓</span></a></div></div>
+      </section>
+
+      <section id="session" className="session-workspace">
+        <div className="section-kicker mono"><span>01 / The live session</span><span>Arabic → English</span></div>
+        <div className="workspace-heading"><h2>A space for<br />understanding.</h2><div><span className={`status-label mono ${isLive ? "is-live" : ""}`} role="status"><i />{isLive ? SIMULATION ? "Simulation live" : "Microphone live" : isBusy ? "Connecting…" : runState === "error" ? "Needs attention" : sessionId ? "Prepared · mic off" : "Ready when you are"}</span><p>Prepare during the English khutbah.<br />Go live when the Arabic khutbah begins.</p></div></div>
+        <AppearancePicker appearance={appearance} onChange={chooseAppearance} />
+        {SIMULATION && <a className="demo-launch" href={withAppearance(`${siteOrigin || ""}/display/${DEMO_SESSION_ID}`, appearance)} target="_blank" rel="noreferrer"><span><span className="mono">Experience Tadabbur</span><strong>Simulate live demo</strong></span><span className="demo-launch-copy">Step into the prayer hall view.<br />Arabic and English, unfolding together.</span><span className="demo-launch-arrow" aria-hidden="true">↗</span></a>}
+        <div className="operator-grid">
+          <aside className="session-controls">
+            <div className="panel-label mono"><span>Session control</span><span>{formatElapsed(elapsed)}</span></div>
+            <ol className="setup-steps" aria-label="Friday setup steps">{["Prepare", "Share", "Translate"].map((title,index) => <li key={title} aria-current={activeStep === index + 1 ? "step" : undefined}><span>0{index+1}</span>{title}<i>{activeStep > index + 1 ? "✓" : activeStep === index + 1 ? "↗" : "—"}</i></li>)}</ol>
+            <p className="step-hint">{SIMULATION ? "Prepare, open the audience views, then start the scripted simulation. No microphone is used." : stepHint}</p>
+            <button type="button" onClick={() => void (isLive ? stop() : sessionId ? start() : prepare())} disabled={isBusy} className={`primary-action mono ${isLive ? "end-action" : ""}`}>
+              <span>{isLive ? SIMULATION ? "End simulation" : "End translation" : runState === "preparing" ? "Preparing session…" : runState === "starting" ? "Starting transcription…" : runState === "stopping" ? "Ending session…" : sessionId ? SIMULATION ? "Start simulation" : "Start Arabic translation" : "Prepare session"}</span><span aria-hidden="true">{isLive ? "■" : "↗"}</span>
+            </button>
+            {error && <p role="alert" className="error-note">{error}</p>}
+            <div className="recitation-control"><div><h3>Quran mode</h3><button type="button" role="switch" aria-checked={recitationMode || recitationArmed} aria-label="Quran mode" onClick={toggleRecitation} disabled={isBusy || recitationPending !== null} className="quran-switch"><span /></button></div><p>Switch on before recitation to pause translation on public screens.</p><p className="mono recitation-status" role="status">{recitationPending !== null ? "Awaiting confirmation…" : recitationMode ? "Active · Quran being read" : recitationArmed ? "Armed for the start" : "Off · ready to arm"}</p></div>
+            <details className="share-details" open={Boolean(attendeeUrl)}><summary className="mono">Projector & attendee access <span>↗</span></summary>{attendeeUrl ? <div className="share-content">{!isLoopback && <QRCodeSVG value={attendeeUrl} size={112} marginSize={2} level="M" />}<p className="share-url">{attendeeUrl}</p>{isLoopback && <p>Phone access needs a network address. This link works on this computer.</p>}<button type="button" onClick={() => void copyLink(attendeeUrl)} className="text-action mono">{copied ? "Link copied ✓" : "Copy attendee link ↗"}</button><a href={displayUrl} target="_blank" rel="noreferrer" className="text-action mono">Open projector ↗</a><a href={attendeeUrl} target="_blank" rel="noreferrer" className="text-action mono">Open phone view ↗</a></div> : <p>Prepare the session to create your projector and attendee links.</p>}</details>
+          </aside>
+
+          <section className="caption-monitor" aria-label="Live captions">
+            <div className="panel-label mono"><span>Live monitor</span><span>Source / translation</span></div>
+            <div className="source-caption"><div className="caption-label mono"><span>01 / Arabic</span><span>Live transcript</span></div><p dir="rtl" lang="ar" className={`arabic-caption ${partial || latest?.source ? "" : "empty-caption"}`} aria-live="polite">{partial || latest?.source || "بانتظار بداية الخطبة العربية"}</p>{partial && <p className="mono partial-label">Listening · phrase in progress</p>}</div>
+            <div className="translation-caption"><div className="caption-label mono"><span>02 / English</span><span>Public preview</span></div><div className="english-caption" aria-live="polite">{publicQuranActive ? <p>Quran being read</p> : publicPreview.caption?.isQuranicHadithCandidate ? <p>Scriptural passage being read</p> : publicPreview.caption?.translations.en ? <p>{publicPreview.caption.translations.en}</p> : <div className="waiting-caption"><span className="waiting-mark" aria-hidden="true">↳</span><p>Translation follows the speaker.</p><span>English captions will appear after each complete Arabic phrase.</span></div>}</div></div>
+            <div className="monitor-bottom"><div className="audio-meter" aria-label={SIMULATION ? "Scripted audio simulation" : isLive ? "Microphone activity" : "Microphone off"}>{Array.from({length:32},(_,index)=><span key={index} className={isLive && micLevel * 8 > (index+1)/32 ? "active" : ""} style={{height:`${6+(index%6)*3}px`}} />)}</div><span className="mono">{SIMULATION ? "Scripted audio simulation" : isLive ? `${Math.round(bytesSent/1024)} KB sent` : "Microphone off"}</span></div>
+          </section>
+        </div>
+        {previous && !publicQuranActive && !previous.isQuranicHadithCandidate && !previous.isQuranicCandidate && <div className="previous-caption"><span className="mono">Previous phrase</span><p>{previous.translations.en}</p></div>}
+      </section>
+
+      <section id="how-it-works" className="friday-flow"><div className="section-kicker mono"><span>02 / A considered Friday flow</span><span>Simple by intention</span></div><h2>Less to manage.<br />More to reflect on.</h2><div className="flow-grid">{[["01", "Prepare quietly.", "Check the microphone during the English khutbah. No audio is broadcast until you go live."],["02", "Bring everyone in.", "Open the prayer hall projector. Share the attendee link for captions on individual phones."],["03", "Let the words reach.", "Begin translation with the Arabic khutbah. Pause for Quran recitation, and end when the khutbah finishes."]].map(([number,title,copy])=><article key={number}><span className="mono">{number} /</span><h3>{title}</h3><p>{copy}</p></article>)}</div></section>
+      <footer className="site-footer"><div className="footer-top mono"><span>Built around the khutbah.</span><a href="https://tanzil.net" target="_blank" rel="noreferrer">Quran text reference / Tanzil ↗</a></div><p className="footer-wordmark">Tadabbur</p><div className="footer-bottom mono"><span>Listen. Understand. Reflect.</span><a href="#session">Back to your session ↑</a></div></footer>
     </main>
   );
 }

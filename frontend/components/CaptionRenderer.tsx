@@ -7,66 +7,46 @@ type Props = {
   isQuranActive?: boolean;
   variant?: "projector" | "attendee";
   scale?: number;
+  interimSource?: string;
 };
 
-/** Public captions appear only after classification of a complete phrase. */
-export default function CaptionRenderer({ caption, targetLanguage, waitingText = "Listening for the next phrase…", isQuranActive = false, variant = "projector", scale = 1 }: Props) {
+/** Live Arabic is shown first; English appears only for its finalized phrase. */
+export default function CaptionRenderer({ caption, targetLanguage, waitingText = "Waiting for the speaker", isQuranActive = false, variant = "projector", scale = 1, interimSource = "" }: Props) {
   if (variant === "attendee") {
     return (
-      <div className="rise-in rounded-2xl border border-[#2a4139] bg-[#162920] p-5" role="status" aria-live="polite">
+      <div className="attendee-caption rounded-2xl border border-[#aaa99b] bg-[#d5d5ca] p-5" role="status" aria-live="polite">
         {isQuranActive || caption?.isQuranicCandidate ? (
           <div className="py-8 text-center">
-            <div className="mx-auto mb-5 grid h-12 w-12 place-items-center rounded-xl bg-[#d4a94f]/10 font-arabic text-3xl text-[#e6c374]" aria-hidden="true">۞</div>
-            <p className="font-semibold text-[#f5f2ea]" style={{ fontSize: `${1.5 * scale}rem`, lineHeight: 1.35 }}>Quran being read</p>
+            <div className="mx-auto mb-5 grid h-12 w-12 place-items-center rounded-xl bg-[#25251f]/10 font-arabic text-3xl text-[#303028]" aria-hidden="true">۞</div>
+            <p className="font-semibold text-[#0f0f0f]" style={{ fontSize: `${1.5 * scale}rem`, lineHeight: 1.35 }}>Quran being read</p>
           </div>
         ) : caption?.isQuranicHadithCandidate ? (
           <div className="py-6 text-center">
-            <p className="font-semibold text-[#f5f2ea]" style={{ fontSize: `${1.25 * scale}rem` }}>Scriptural passage being read</p>
-            <p className="mt-3 text-sm leading-relaxed text-[#9db3aa]">Translation is paused for this passage.</p>
+            <p className="font-semibold text-[#0f0f0f]" style={{ fontSize: `${1.25 * scale}rem` }}>Scriptural passage being read</p>
+            <p className="mt-3 text-sm leading-relaxed text-[#626256]">Translation is paused for this passage.</p>
           </div>
-        ) : caption ? (
+        ) : caption || interimSource ? (
           <>
-            <div dir="rtl" lang="ar" className="font-arabic font-medium text-[#f5f2ea]" style={{ fontSize: `${1.4 * scale}rem`, lineHeight: 1.7 }}>{caption.source}</div>
-            <div dir="auto" lang={targetLanguage} className="mt-3 font-medium text-[#e6c374]" style={{ fontSize: `${1.06 * scale}rem`, lineHeight: 1.5 }}>
-              {caption.translations[targetLanguage] || "Translation unavailable for this phrase."}
+            <div dir="rtl" lang="ar" className="font-arabic font-medium text-[#0f0f0f]" style={{ fontSize: `${1.4 * scale}rem`, lineHeight: 1.7 }}>{interimSource || caption?.source}</div>
+            <div dir="auto" lang={targetLanguage} className="font-caption mt-3 font-medium text-[#303028]" style={{ fontSize: `${1.06 * scale}rem`, lineHeight: 1.5 }}>
+              {caption?.translations[targetLanguage] || <span className="caption-listening" role="status" aria-label={interimSource ? "Translating" : undefined}>{interimSource ? "…" : waitingText}</span>}
             </div>
           </>
-        ) : <p className="py-7 text-center text-[#9db3aa]">{waitingText}</p>}
+        ) : <p className="py-7 text-center text-[#626256]">{waitingText}</p>}
       </div>
     );
   }
 
   if (isQuranActive || caption?.isQuranicCandidate) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center text-center" role="status" aria-live="polite">
-        <div className="mb-7 grid h-16 w-16 place-items-center rounded-2xl border border-[#d4a94f]/40 bg-[#d4a94f]/10 font-arabic text-4xl text-[#e6c374]" aria-hidden="true">۞</div>
-        <p className="text-[clamp(2rem,5vw,5rem)] font-semibold leading-tight tracking-tight text-[#f5f2ea]">Quran being read</p>
-      </div>
-    );
+    return <div className="projector-notice recitation-notice" role="status" aria-live="polite"><span className="recitation-symbol" aria-hidden="true">۞</span><h1>Quran being read</h1></div>;
   }
-
   if (caption?.isQuranicHadithCandidate) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center text-center" role="status" aria-live="polite">
-        <p className="text-[clamp(1.8rem,4vw,4rem)] font-semibold leading-tight text-[#f5f2ea]">Scriptural passage being read</p>
-        <p className="mt-5 max-w-[40ch] text-[clamp(1rem,1.7vw,1.45rem)] leading-relaxed text-[#9db3aa]">Translation is paused for this passage.</p>
-      </div>
-    );
+    return <div className="projector-notice" role="status" aria-live="polite"><h1>Scriptural passage being read</h1><p>Translation is paused for this passage.</p></div>;
   }
-
-  if (!caption) {
-    return <p className="max-w-[28ch] text-center text-[clamp(1.4rem,3vw,2.8rem)] leading-snug text-[#9db3aa]" role="status">{waitingText}</p>;
-  }
-
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-[clamp(1rem,3.5vh,2rem)] text-center" aria-live="polite">
-      <div dir="rtl" lang={caption.sourceLang} className="max-w-[26ch] font-arabic font-medium leading-[1.6] text-[#f5f2ea]" style={{ fontSize: "clamp(1.6rem,4.6vw,5rem)" }}>
-        {caption.source}
-      </div>
-      <div className="h-[2px] w-16 shrink-0 bg-[#d4a94f] opacity-70" aria-hidden="true" />
-      <div dir="auto" lang={targetLanguage} className="max-w-[36ch] font-medium leading-[1.45] text-[#e6ded0]" style={{ fontSize: "clamp(1.25rem,3.25vw,3.75rem)" }}>
-        {caption.translations[targetLanguage] || <span className="text-[#9db3aa]">Translation unavailable for this phrase.</span>}
-      </div>
+    <div className="projector-caption-pair" aria-live="polite">
+      <section className="projector-source"><div className="caption-label mono"><span>01 / Arabic</span>{interimSource && <span className="caption-speaking">Speaking <i aria-hidden="true" /></span>}</div><p dir="rtl" lang={caption?.sourceLang ?? "ar"} className="font-arabic">{interimSource || caption?.source || <span className="caption-listening" aria-hidden="true">…</span>}</p></section>
+      <section className="projector-translation"><div className="caption-label mono">02 / Translation</div><p dir="auto" lang={targetLanguage}>{caption?.translations[targetLanguage] || <span className="caption-listening" role="status" aria-label={interimSource ? "Translating" : undefined}>{interimSource ? "…" : waitingText}</span>}</p></section>
     </div>
   );
 }

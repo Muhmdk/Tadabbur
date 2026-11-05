@@ -5,6 +5,9 @@ import { useParams } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import type { Language, ServerCaptionFinal, ServerMessage, Session } from "@contract";
 
+import AppearancePicker from "@/components/AppearancePicker";
+import { useAppearance, withAppearance } from "@/lib/appearance";
+import { DEMO_SESSION_ID } from "@/lib/demo";
 import CaptionRenderer from "@/components/CaptionRenderer";
 import { browserEndpoints } from "@/lib/endpoints";
 import { nextPartialCaptionState, selectPublicCaption } from "@/lib/public-caption";
@@ -35,9 +38,11 @@ function formatDate(iso?: string): string {
 }
 
 export default function DisplayPage() {
+  const { appearance, chooseAppearance } = useAppearance();
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<DisplayState>("connecting");
+  const [partialText, setPartialText] = useState("");
   const [partialState, setPartialState] = useState<"none" | "listening" | "quran">("none");
   const [latest, setLatest] = useState<ServerCaptionFinal | null>(null);
   const [manualQuran, setManualQuran] = useState(false);
@@ -56,16 +61,19 @@ export default function DisplayPage() {
 
     const handleMessage = (message: ServerMessage) => {
       if (message.type === "caption.partial") {
+        setPartialText(message.text);
         setPartialState((current) => nextPartialCaptionState(current, Boolean(message.isQuranicCandidate)));
         setState("live");
       } else if (message.type === "caption.final") {
         setLatest(message);
         setPartialState("none");
+        setPartialText("");
         setState("live");
       } else if (message.type === "recitation.state") {
         setManualQuran(message.active);
         setLatest(null);
         setPartialState("none");
+        setPartialText("");
       } else if (message.state === "ended") {
         ended = true;
         setState("ended");
@@ -84,6 +92,7 @@ export default function DisplayPage() {
       const old = stream;
       stream = null;
       old?.close();
+      setPartialText("");
       setPartialState("listening");
       setState("reconnecting");
       retryTimer = setTimeout(() => {
@@ -95,7 +104,7 @@ export default function DisplayPage() {
     async function connect() {
       try {
         const endpoints = browserEndpoints();
-        const response = await fetch(`${endpoints.api}/api/sessions/${sessionId}`);
+        const response = await fetch(`${endpoints.api}${process.env.NEXT_PUBLIC_SIMULATION === "1" && sessionId === DEMO_SESSION_ID ? "/api/demo" : `/api/sessions/${sessionId}`}`);
         if (response.status === 404) { terminalError = true; throw new Error("This session is unavailable."); }
         if (!response.ok) throw new Error("Could not load this session.");
         const nextSession = (await response.json()) as Session;
@@ -125,77 +134,30 @@ export default function DisplayPage() {
   }, [sessionId]);
 
   const targetLanguage: Language = session?.targetLanguages[0] ?? "en";
-  const followUrl = joinBaseUrl ? `${joinBaseUrl}/join/${sessionId}` : "";
+  const followUrl = joinBaseUrl ? withAppearance(`${joinBaseUrl}/join/${sessionId}`, appearance) : "";
   const isLive = state === "live";
-  const publicCaption = selectPublicCaption(latest, partialState, manualQuran);
+  const publicCaption = selectPublicCaption(latest, partialState, manualQuran, partialText);
 
   return (
-    <div
-      className="flex h-full w-full flex-col text-[#f5f2ea]"
-      style={{ background: "radial-gradient(120% 140% at 50% 0%, #152621 0%, #0b1512 62%)" }}
-    >
-      {/* Header ------------------------------------------------------------ */}
-      <header className="flex shrink-0 items-start justify-between gap-4 px-[clamp(1.25rem,4vw,3rem)] pt-[clamp(1.25rem,3.5vh,2rem)]">
-        <div className="flex items-center gap-2.5">
-          <span className={`h-2.5 w-2.5 rounded-full bg-[#e5533d] ${isLive ? "livepulse" : "opacity-40"}`} />
-          <span className="text-[clamp(.7rem,1vw,.85rem)] font-bold uppercase tracking-[.12em] text-[#e5533d]">
-            {isLive ? "Live" : statusLabel(state)}
-          </span>
-        </div>
-
-        <div className="min-w-0 text-center">
-          <div className="truncate text-[clamp(.9rem,1.3vw,1.1rem)] font-semibold text-[#e6ded0]">Tadabbur</div>
-          <div className="mt-1 text-[clamp(.7rem,1vw,.8rem)] text-[#6d8177]">Jummah Khutbah · {formatDate(session?.createdAt)}</div>
-        </div>
-
-        <div className="flex items-center gap-1.5 text-[clamp(.7rem,1vw,.8rem)] font-medium text-[#6d8177]">
-          <span className="hidden sm:inline">Translating to</span>
-          <span className="font-semibold text-[#d4a94f]">{languageName(targetLanguage)}</span>
-          <button
-            type="button"
-            onClick={() => void document.documentElement.requestFullscreen?.()}
-            className="ml-3 hidden rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:bg-white/10 lg:inline-block"
-          >
-            Full screen
-          </button>
-        </div>
+    <div className="projector-surface" data-appearance={appearance}>
+      <header className="projector-masthead">
+        <a href="/" className="wordmark">Tadabbur<span className="brand-arabic" lang="ar">تدبّر</span></a>
+        <span className="projector-occasion mono">Jummah Khutbah · {formatDate(session?.createdAt)}</span>
+        <AppearancePicker appearance={appearance} onChange={chooseAppearance} compact />
+        <span className={`status-label mono ${isLive ? "is-live" : ""}`} role="status"><i />{process.env.NEXT_PUBLIC_SIMULATION === "1" ? "Simulation" : statusLabel(state)}</span>
       </header>
-
-      {/* Stage ------------------------------------------------------------- */}
-      <main className="flex min-h-0 flex-1 items-center justify-center px-[clamp(1.5rem,7vw,5.5rem)] py-[clamp(1rem,3vh,2rem)]">
-        {error ? (
-          <div className="max-w-2xl border-l-2 border-[#e5533d] pl-6 text-[clamp(1.1rem,2.4vw,1.75rem)] leading-relaxed text-[#f2cfca]">
-            {error}
-          </div>
-        ) : state === "ended" ? (
-          <div className="text-center">
-            <p className="font-arabic text-[clamp(2rem,5vw,4rem)] text-[#f7ead0]">جزاكم الله خيراً</p>
-            <p className="mt-6 text-[clamp(1.1rem,2.4vw,1.9rem)] leading-relaxed text-white/75">This live translation session has ended.</p>
-          </div>
-        ) : (
-          <CaptionRenderer
-            caption={publicCaption.caption}
-            targetLanguage={targetLanguage}
-            isQuranActive={publicCaption.isQuranActive}
-            waitingText={state === "connecting" ? "Connecting to live captions…" : state === "waiting" ? "Captions begin when the Arabic khutbah starts." : state === "reconnecting" ? "Reconnecting to live captions…" : "Listening for the next phrase…"}
-          />
-        )}
-      </main>
-
-      {/* Footer ------------------------------------------------------------ */}
-      <footer className="flex shrink-0 items-end justify-between gap-4 px-[clamp(1.25rem,4vw,3rem)] pb-[clamp(1.25rem,3.5vh,1.75rem)]">
-        <div className="text-[clamp(.68rem,1vw,.78rem)] text-[#54655c]">
-          Arabic → {languageName(targetLanguage)} · shown after each complete phrase
+      <section className="projector-stage" aria-label="Khutbah captions">
+        <div className="projector-panel-heading mono"><span>Listen. Understand. Reflect.</span><span>{languageName(targetLanguage)}</span></div>
+        <div className="projector-caption-area">
+          {error ? <p className="projector-notice" role="alert">{error}</p> : state === "ended" ? (
+            <div className="projector-notice"><p dir="rtl" lang="ar" className="font-arabic">جزاكم الله خيراً</p><h1>This session has ended.</h1></div>
+          ) : <CaptionRenderer caption={publicCaption.caption} targetLanguage={targetLanguage} isQuranActive={publicCaption.isQuranActive} interimSource={publicCaption.interimSource} waitingText={state === "connecting" ? "Connecting to the khutbah…" : state === "reconnecting" ? "Reconnecting…" : "Waiting for the speaker"} />}
         </div>
-        {followUrl && !/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(followUrl) && <div className="flex items-center gap-3 rounded-xl border border-[#1e332c] bg-[#12201b] p-2 pr-3">
-          <div className="rounded-md bg-white p-1.5">
-            <QRCodeSVG value={followUrl} size={40} marginSize={0} level="M" />
-          </div>
-          <div className="text-[clamp(.62rem,.85vw,.72rem)] leading-tight text-[#7c9186]">
-            Scan to follow<br />on your phone
-          </div>
-        </div>}
-      </footer>
+        <footer className="projector-panel-footer">
+          <button type="button" className="projector-fullscreen mono" onClick={() => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.())}>Full screen ↗</button>
+          {followUrl && !/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(followUrl) && <a href={followUrl} className="projector-qr"><span className="mono">Follow on<br />your phone ↗</span><span className="qr-paper"><QRCodeSVG value={followUrl} size={52} marginSize={0} level="M" /></span></a>}
+        </footer>
+      </section>
     </div>
   );
 }

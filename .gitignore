@@ -31,3 +31,6 @@ next-env.d.ts
 # Logs
 *.log
 npm-debug.log*
+
+# Local preview utilities
+.local-tools/

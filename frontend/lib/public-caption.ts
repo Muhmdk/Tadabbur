@@ -11,16 +11,20 @@ export function nextPartialCaptionState(
 }
 
 /**
- * Hold a Quran notice across ASR clause boundaries. A new partial is not yet
- * classified, so it cannot safely clear the last confirmed recitation.
+ * Keep live Arabic and finalized translations paired to the same phrase.
+ * Recitation remains latched until ordinary speech is finalized.
  */
 export function selectPublicCaption(
   latest: ServerCaptionFinal | null,
   partialState: PartialCaptionState,
   manualQuran: boolean,
-): { caption: ServerCaptionFinal | null; isQuranActive: boolean } {
+  partialText = "",
+): { caption: ServerCaptionFinal | null; isQuranActive: boolean; interimSource: string } {
+  const isQuranActive = manualQuran || partialState === "quran" || Boolean(latest?.isQuranicCandidate);
   return {
-    caption: partialState === "none" ? latest : null,
-    isQuranActive: manualQuran || partialState === "quran" || Boolean(latest?.isQuranicCandidate),
+    caption: partialState === "listening" && !latest?.isQuranicHadithCandidate ? null : latest,
+    isQuranActive,
+    interimSource: !isQuranActive && !latest?.isQuranicHadithCandidate && partialState === "listening"
+      ? partialText : "",
   };
 }
